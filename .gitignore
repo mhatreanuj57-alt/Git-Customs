@@ -1,0 +1,10 @@
+node_modules/
+*.tgz
+npm-debug.log*
+*.log
+coverage/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+tests/tmp/

@@ -1,0 +1,285 @@
+$ErrorActionPreference = 'Continue'
+if ($env:GIT_CUSTOMS_TEST_BIN) {
+    $installDir = $env:GIT_CUSTOMS_TEST_BIN
+}
+else {
+    $installDir = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'scripts'
+}
+$env:PATH = "$installDir;$env:PATH"
+
+$script:pass = 0
+$script:fail = 0
+$failures = New-Object 'System.Collections.Generic.List[string]'
+
+function Check {
+    param([bool]$Condition, [string]$Name)
+    if ($Condition) {
+        $script:pass++
+        Write-Output "PASS: $Name"
+    }
+    else {
+        $script:fail++
+        $failures.Add($Name)
+        Write-Output "FAIL: $Name"
+    }
+}
+
+function Check-Equal {
+    param([string]$Expected, [string]$Actual, [string]$Name)
+    Check ($Expected -ceq $Actual) $Name
+    if ($Expected -cne $Actual) {
+        Write-Output "  expected: $Expected"
+        Write-Output "  actual:   $Actual"
+    }
+}
+
+function Check-Contains {
+    param([string]$Haystack, [string]$Needle, [string]$Name)
+    Check ($Haystack.Contains($Needle)) $Name
+    if (-not $Haystack.Contains($Needle)) {
+        Write-Output "  missing: $Needle"
+    }
+}
+
+function Run-Git {
+    param([string]$WorkingDirectory, [string[]]$Arguments)
+    $output = & git -C $WorkingDirectory @Arguments 2>&1
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        throw "git -C `"$WorkingDirectory`" $($Arguments -join ' ') failed ($code): $($output -join "`n")"
+    }
+    return $output
+}
+
+function Invoke-Suggest {
+    param([string]$WorkingDirectory)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'git'
+    $psi.Arguments = 'suggest'
+    $psi.WorkingDirectory = $WorkingDirectory
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding $false
+    $psi.StandardErrorEncoding = New-Object System.Text.UTF8Encoding $false
+    $process = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    [pscustomobject]@{
+        ExitCode = $process.ExitCode
+        Stdout   = $stdout
+        Stderr   = $stderr
+    }
+}
+
+function Get-ChangedLines {
+    param([string]$Text)
+    @($Text -split "`r?`n" | Where-Object { $_ -match '^git ' })
+}
+
+$base = Join-Path $env:TEMP ('git-suggest-tests-' + [guid]::NewGuid().ToString('N'))
+$origin = Join-Path $base 'origin.git'
+$work = Join-Path $base 'work repo'
+$noOrigin = Join-Path $base 'no-origin'
+$notRepo = Join-Path $base 'not-a-repo'
+
+try {
+    New-Item -ItemType Directory -Force -Path $base | Out-Null
+    New-Item -ItemType Directory -Force -Path $notRepo | Out-Null
+
+    & git init --bare -q $origin
+    if ($LASTEXITCODE -ne 0) { throw 'bare init failed' }
+
+    & git init -q -b main $work
+    if ($LASTEXITCODE -ne 0) { throw 'work init failed' }
+    Run-Git $work @('config', 'user.email', 'test@example.com') | Out-Null
+    Run-Git $work @('config', 'user.name', 'Test') | Out-Null
+    Run-Git $work @('remote', 'add', 'origin', $origin) | Out-Null
+
+    Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'initial'
+    Set-Content -LiteralPath (Join-Path $work 'delete me.txt') -Value 'initial'
+    Set-Content -LiteralPath (Join-Path $work 'staged delete.txt') -Value 'initial'
+    Set-Content -LiteralPath (Join-Path $work 'staged only.txt') -Value 'initial'
+    Set-Content -LiteralPath (Join-Path $work 'rename old.txt') -Value 'initial'
+    Run-Git $work @('add', '-A') | Out-Null
+    Run-Git $work @('commit', '-q', '-m', 'Initial commit') | Out-Null
+    Run-Git $work @('push', '-q', '-u', 'origin', 'main') | Out-Null
+
+    # Clean repository
+    $clean = Invoke-Suggest $work
+    Check-Equal 0 $clean.ExitCode 'clean repo exit code is 0'
+    Check-Equal 'Repository "work repo" is up to date.' $clean.Stdout.Trim() 'clean repo prints exact up-to-date line'
+    Check-Equal '' $clean.Stderr.Trim() 'clean repo writes no stderr'
+
+    # Outside a repository
+    $outside = Invoke-Suggest $notRepo
+    Check-Equal 1 $outside.ExitCode 'outside a repository exits 1'
+    Check-Contains $outside.Stderr 'not inside a Git working tree' 'outside a repository shows clear error'
+
+    # Missing origin
+    & git init -q -b main $noOrigin
+    if ($LASTEXITCODE -ne 0) { throw 'no-origin init failed' }
+    Run-Git $noOrigin @('config', 'user.email', 'test@example.com') | Out-Null
+    Run-Git $noOrigin @('config', 'user.name', 'Test') | Out-Null
+    Set-Content -LiteralPath (Join-Path $noOrigin 'a.txt') -Value 'a'
+    Run-Git $noOrigin @('add', '-A') | Out-Null
+    Run-Git $noOrigin @('commit', '-q', '-m', 'init') | Out-Null
+    $missingOrigin = Invoke-Suggest $noOrigin
+    Check-Equal 1 $missingOrigin.ExitCode 'repo without origin exits 1'
+    Check-Contains $missingOrigin.Stderr "has no 'origin' remote configured" 'repo without origin shows clear error'
+
+    # Detached HEAD
+    Run-Git $work @('checkout', '-q', '--detach') | Out-Null
+    $detached = Invoke-Suggest $work
+    Check-Equal 1 $detached.ExitCode 'detached HEAD exits 1'
+    Check-Contains $detached.Stderr 'detached HEAD state' 'detached HEAD shows clear error'
+    Run-Git $work @('checkout', '-q', 'main') | Out-Null
+
+    # Make every kind of change.
+    Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'modified'
+    Remove-Item -LiteralPath (Join-Path $work 'delete me.txt')
+    Run-Git $work @('rm', '-q', '--', 'staged delete.txt') | Out-Null
+    Set-Content -LiteralPath (Join-Path $work 'staged only.txt') -Value 'staged change'
+    Run-Git $work @('add', '--', 'staged only.txt') | Out-Null
+    Run-Git $work @('mv', '--', 'rename old.txt', 'rename new.txt') | Out-Null
+
+    Set-Content -LiteralPath (Join-Path $work 'untracked file.txt') -Value 'u'
+    Set-Content -LiteralPath (Join-Path $work "quote'file.txt") -Value 'q'
+    Set-Content -LiteralPath (Join-Path $work '$dollar.txt') -Value 'd'
+    New-Item -ItemType Directory -Force -Path (Join-Path $work 'sub dir') | Out-Null
+    Set-Content -LiteralPath (Join-Path $work 'sub dir\space name.js') -Value 's'
+
+    $headBefore = (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim()
+    $statusBefore = (Run-Git $work @('status', '--porcelain=v1') | Out-String).Trim()
+    $result = Invoke-Suggest $work
+    $headAfter = (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim()
+    $statusAfter = (Run-Git $work @('status', '--porcelain=v1') | Out-String).Trim()
+
+    Check-Equal 0 $result.ExitCode 'dirty repo exits 0'
+    Check-Equal $headBefore $headAfter 'git suggest does not change HEAD'
+    Check-Equal $statusBefore $statusAfter 'git suggest does not change status'
+    Check-Equal '' $result.Stderr.Trim() 'dirty repo writes no stderr'
+
+    $out = $result.Stdout
+    Check-Contains $out '# Repository "work repo" | branch: main' 'prints repo name and branch'
+    Check-Contains $out '# Changes: 9 file(s)' 'counts all changed files'
+    Check-Contains $out 'added 0, modified 3, deleted 2, untracked 4' 'reports change categories'
+    Check-Contains $out 'staged 3' 'reports staged files'
+    Check-Contains $out '# Suggested commands only; nothing was executed.' 'states commands are not executed'
+
+    $expectedLines = @(
+        "git add -- 'tracked.txt'",
+        "git commit -m 'Update tracked.txt (file commit #2)' -- 'tracked.txt'",
+        "git add -A -- 'delete me.txt'",
+        "git commit -m 'Delete delete me.txt (file commit #2)' -- 'delete me.txt'",
+        "git commit -m 'Delete staged delete.txt (file commit #2)' -- 'staged delete.txt'",
+        "git commit -m 'Update staged only.txt (file commit #2)' -- 'staged only.txt'",
+        "git commit -m 'Rename rename old.txt -> rename new.txt (file commit #2)' -- 'rename old.txt' 'rename new.txt'",
+        "git add -- 'untracked file.txt'",
+        "git commit -m 'Add untracked file.txt (file commit #1)' -- 'untracked file.txt'",
+        "git add -- 'quote''file.txt'",
+        "git commit -m 'Add quote''file.txt (file commit #1)' -- 'quote''file.txt'",
+        "git add -- '`$dollar.txt'",
+        "git commit -m 'Add `$dollar.txt (file commit #1)' -- '`$dollar.txt'",
+        "git add -- 'sub dir/space name.js'",
+        "git commit -m 'Add sub dir/space name.js (file commit #1)' -- 'sub dir/space name.js'",
+        'git push origin main'
+    )
+
+    foreach ($line in $expectedLines) {
+        Check-Contains $out $line "prints: $line"
+    }
+
+    $changedLines = Get-ChangedLines $out
+    Check (-not ($changedLines -contains "git add -- 'staged only.txt'")) 'omits redundant add for staged modification'
+    Check (-not ($changedLines -contains "git add -A -- 'staged delete.txt'")) 'omits failing add for staged deletion'
+    Check (-not ($changedLines -contains "git add -- 'rename new.txt'")) 'omits redundant add for staged rename'
+    Check ($changedLines[-1] -eq 'git push origin main') 'prints push as the final command'
+
+    # Execute the printed commands exactly as PowerShell would.
+    foreach ($line in $changedLines) {
+        Push-Location -LiteralPath $work
+        $commandOutput = Invoke-Expression $line 2>&1
+        $commandExit = $LASTEXITCODE
+        Pop-Location
+        Check-Equal 0 $commandExit "generated command succeeds: $line"
+        if ($commandExit -ne 0) {
+            Write-Output "  output: $($commandOutput | Out-String)"
+        }
+    }
+
+    $statusClean = (Run-Git $work @('status', '--porcelain=v1') | Out-String).Trim()
+    Check-Equal '' $statusClean 'working tree is clean after running generated commands'
+
+    $afterRun = Invoke-Suggest $work
+    Check-Equal 'Repository "work repo" is up to date.' $afterRun.Stdout.Trim() 'prints up-to-date after generated commands run'
+
+    $commitCount = ((Run-Git $work @('rev-list', '--count', 'HEAD') | Out-String).Trim())
+    Check-Equal '10' $commitCount 'created one commit per changed file'
+
+    $log = (Run-Git $work @('log', '--format=%s') | Out-String)
+    foreach ($message in @(
+        'Update tracked.txt (file commit #2)',
+        'Delete delete me.txt (file commit #2)',
+        'Delete staged delete.txt (file commit #2)',
+        'Update staged only.txt (file commit #2)',
+        'Rename rename old.txt -> rename new.txt (file commit #2)',
+        'Add untracked file.txt (file commit #1)',
+        "Add quote'file.txt (file commit #1)",
+        'Add $dollar.txt (file commit #1)',
+        'Add sub dir/space name.js (file commit #1)'
+    )) {
+        Check-Contains $log $message "commit exists: $message"
+    }
+
+    $localHead = (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim()
+    $remoteHead = (& git --git-dir=$origin rev-parse refs/heads/main 2>$null | Out-String).Trim()
+    Check-Equal $localHead $remoteHead 'pushed commit matches local HEAD'
+
+    $trackedCommits = ((Run-Git $work @('log', '--follow', '--format=%H', '--', 'tracked.txt') | Out-String).Trim() -split "`r?`n").Count
+    Check-Equal '2' ([string]$trackedCommits) 'tracked file has 2 successful commits'
+    $newNameCommits = ((Run-Git $work @('log', '--follow', '--format=%H', '--', 'rename new.txt') | Out-String).Trim() -split "`r?`n").Count
+    Check-Equal '2' ([string]$newNameCommits) 'rename-aware file history has 2 commits'
+    $deletedCommits = ((Run-Git $work @('log', '--follow', '--format=%H', '--', 'delete me.txt') | Out-String).Trim() -split "`r?`n").Count
+    Check-Equal '2' ([string]$deletedCommits) 'deleted file history has 2 commits'
+
+    # Persistent count after successful commits.
+    Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'modified again'
+    Set-Content -LiteralPath (Join-Path $work 'rename new.txt') -Value 'renamed modified'
+    $next = Invoke-Suggest $work
+    Check-Contains $next.Stdout "git commit -m 'Update tracked.txt (file commit #3)' -- 'tracked.txt'" 'count increments to #3 after a successful commit'
+    Check-Contains $next.Stdout "git commit -m 'Update rename new.txt (file commit #3)' -- 'rename new.txt'" 'rename count persists via --follow'
+
+    # Empty repository with an origin and an untracked file.
+    $empty = Join-Path $base 'empty repo'
+    & git init -q -b main $empty
+    if ($LASTEXITCODE -ne 0) { throw 'empty repo init failed' }
+    Run-Git $empty @('config', 'user.email', 'test@example.com') | Out-Null
+    Run-Git $empty @('config', 'user.name', 'Test') | Out-Null
+    Run-Git $empty @('remote', 'add', 'origin', $origin) | Out-Null
+    Set-Content -LiteralPath (Join-Path $empty 'first.txt') -Value 'first'
+    $emptyResult = Invoke-Suggest $empty
+    Check-Equal 0 $emptyResult.ExitCode 'repo with no commits exits 0'
+    Check-Contains $emptyResult.Stdout "git commit -m 'Add first.txt (file commit #1)' -- 'first.txt'" 'new file in repo with no commits starts at #1'
+}
+catch {
+    $script:fail++
+    $failures.Add('unexpected exception')
+    Write-Output "FAIL: unexpected exception"
+    Write-Output ($_ | Out-String)
+}
+finally {
+    Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Output ''
+Write-Output "RESULT: $script:pass passed, $script:fail failed"
+if ($script:fail -gt 0) {
+    Write-Output 'Failures:'
+    foreach ($failure in $failures) {
+        Write-Output " - $failure"
+    }
+    exit 1
+}
+exit 0

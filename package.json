@@ -1,0 +1,66 @@
+{
+  "name": "anuj-custom-git-command-list",
+  "version": "1.0.0",
+  "description": "Tested Git extensions for Windows: GitHub Actions workflow helpers, safe per-file autopush, PR and release workflows, repository health checks, and more.",
+  "keywords": [
+    "git",
+    "git-extension",
+    "git-commands",
+    "github-actions",
+    "workflow",
+    "autopush",
+    "pull-request",
+    "release",
+    "security",
+    "windows",
+    "powershell"
+  ],
+  "homepage": "https://github.com/mhatreanuj57-alt/Git-Customs#readme",
+  "bugs": {
+    "url": "https://github.com/mhatreanuj57-alt/Git-Customs/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mhatreanuj57-alt/Git-Customs.git"
+  },
+  "author": "Anuj Mhatre (https://github.com/mhatreanuj57-alt)",
+  "license": "MIT",
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "lib/commands.js",
+  "bin": {
+    "anuj-custom-git-command-list": "bin/cli.js",
+    "git-customs": "bin/cli.js",
+    "git-action-workflow": "bin/git-action-workflow.js",
+    "git-action-fix": "bin/git-action-fix.js",
+    "git-suggest": "bin/git-suggest.js",
+    "git-autopush": "bin/git-autopush.js",
+    "git-work": "bin/git-work.js",
+    "git-doctor": "bin/git-doctor.js",
+    "git-security-check": "bin/git-security-check.js",
+    "git-pr-flow": "bin/git-pr-flow.js",
+    "git-release": "bin/git-release.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "scripts/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node tests/run-tests.js",
+    "test:commands": "node tests/run-tests.js --commands-only",
+    "test:cli": "node tests/test-cli.js",
+    "test:install": "node tests/test-install.js",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm test"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
