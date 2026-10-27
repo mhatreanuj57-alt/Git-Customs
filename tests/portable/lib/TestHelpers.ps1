@@ -279,6 +279,7 @@ function Invoke-TestGit {
         $stderr = ''
         if (Test-Path -LiteralPath $errorFile) {
             $stderr = [string](Get-Content -LiteralPath $errorFile -Raw -ErrorAction SilentlyContinue)
+            $stderr = ($stderr -replace '\s+', ' ').Trim()
         }
         $lines = [string[]]@($output | ForEach-Object { [string]$_ })
         return [pscustomobject]@{
