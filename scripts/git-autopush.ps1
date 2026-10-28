@@ -1,17 +1,19 @@
 $ErrorActionPreference = 'Continue'
 
 if ($args -contains '--help' -or $args -contains '-h') {
-    Write-Output 'Usage: git autopush'
+    Write-Output 'Usage: git autopush [--combined]'
     Write-Output ''
     Write-Output 'Re-detects the pending changes reported by git suggest, then stages,'
-    Write-Output 'commits, and pushes each file individually. It stops immediately if'
-    Write-Output 'anything fails or if the pending changes change during the run.'
+    Write-Output 'commits, and pushes each file individually. --combined creates one commit.'
+    Write-Output 'It stops if anything fails or if pending changes change during the run.'
     Write-Output 'Requires a Git working tree with an origin remote and a checked-out branch.'
     exit 0
 }
 
-if ($args.Count -gt 0) {
-    [Console]::Error.WriteLine("git autopush: unknown argument(s): $($args -join ' ')")
+$combined = $args -contains '--combined'
+$unknown = @($args | Where-Object { $_ -ne '--combined' })
+if ($unknown.Count -gt 0) {
+    [Console]::Error.WriteLine("git autopush: unknown argument(s): $($unknown -join ' ')")
     exit 1
 }
 
@@ -116,7 +118,55 @@ Write-Output "# Repository `"$($initialContext.RepoName)`" | branch: $($initialC
 Write-Output "# Run from: $($initialContext.RepoRoot)"
 Write-Output "# Pending: $($initialPlan.Entries.Count) file(s) | added $($initialPlan.AddedCount), modified $($initialPlan.ModifiedCount), deleted $($initialPlan.DeletedCount), untracked $($initialPlan.UntrackedCount) | staged $($initialPlan.StagedCount) (staged overlaps)"
 Write-Output '# Re-checking the pending changes before every file; stopping on any failure or stale suggestion.'
+Write-Output '# Proposed commit messages:'
+if ($combined) { Write-Output ("  combined: {0}" -f (Get-GitCombinedMessage $initialPlan.Suggestions)) }
+else { foreach ($suggestion in @($initialPlan.Suggestions)) { Write-Output ("  {0}: {1}" -f $suggestion.Path, $suggestion.Message) } }
 Write-Output ''
+if ((Read-Host 'Continue with the configured add, commit, and push workflow? [y/N]') -notmatch '^(?i:y|yes)$') {
+    Write-Output 'Autopush cancelled; no files were staged, committed, or pushed.'
+    exit 0
+}
+
+if ($combined) {
+    try {
+        $currentContext = Get-GitRepositoryContext
+        if ($currentContext.Branch -cne $initialBranch -or $currentContext.OriginUrl -cne $initialOriginUrl) { throw 'branch or origin changed after confirmation; stopping.' }
+        $currentPlan = Get-GitSuggestionPlan $currentContext
+        if ($currentPlan.Suggestions.Count -ne $initialPlan.Suggestions.Count) { throw 'pending changes changed after confirmation; stopping.' }
+        for ($i = 0; $i -lt $initialPlan.Suggestions.Count; $i++) {
+            if ($currentPlan.Suggestions[$i].Key -cne $initialPlan.Suggestions[$i].Key -or $currentPlan.Suggestions[$i].Message -cne $initialPlan.Suggestions[$i].Message -or $currentPlan.Suggestions[$i].DiffHash -cne $initialPlan.Suggestions[$i].DiffHash) { throw 'pending changes or suggested messages changed after confirmation; stopping.' }
+        }
+        foreach ($suggestion in $currentPlan.Suggestions) {
+            if ($suggestion.NeedsAdd) {
+                $addResult = Invoke-GitAction $suggestion.AddArguments
+                if ($addResult.ExitCode -ne 0) { throw ("git add failed for '$($suggestion.Path)'.`n" + (Format-GitFailure $addResult)) }
+            }
+        }
+        $stagedPlan = Get-GitSuggestionPlan (Get-GitRepositoryContext)
+        if ($stagedPlan.Suggestions.Count -ne $initialPlan.Suggestions.Count) { throw 'pending changes changed while staging; stopping before commit.' }
+        for ($i = 0; $i -lt $initialPlan.Suggestions.Count; $i++) {
+            if ($stagedPlan.Suggestions[$i].DiffHash -cne $initialPlan.Suggestions[$i].DiffHash) { throw 'file contents changed after confirmation; stopping before commit.' }
+        }
+        $currentPlan = $stagedPlan
+        $commitPaths = @($currentPlan.Suggestions | ForEach-Object { $_.CommitPaths } | Select-Object -Unique)
+        $message = Get-GitCombinedMessage $currentPlan.Suggestions
+        $headBefore = (Invoke-GitDetect @('-C', $currentContext.RepoRoot, 'rev-parse', '--verify', 'HEAD')).Output -join ''
+        $commit = Invoke-GitAction (@('--literal-pathspecs', '-C', $currentContext.RepoRoot, 'commit', '-m', $message, '--') + $commitPaths)
+        if ($commit.ExitCode -ne 0) { throw ("git commit failed.`n" + (Format-GitFailure $commit)) }
+        $headAfter = (Invoke-GitDetect @('-C', $currentContext.RepoRoot, 'rev-parse', '--verify', 'HEAD')).Output -join ''
+        if ([string]::IsNullOrWhiteSpace($headAfter) -or $headAfter -ceq $headBefore) { throw 'the combined commit did not create a new commit.' }
+        $script:autoPushCommits = 1
+        $push = Invoke-GitAction @('-C', $currentContext.RepoRoot, 'push', 'origin', $initialBranch)
+        if ($push.ExitCode -ne 0) { throw ("git push origin $initialBranch failed after the combined commit.`n" + (Format-GitFailure $push)) }
+        $script:autoPushCompleted = $script:autoPushTotal
+        $script:autoPushPushes = 1
+        $finalPlan = Get-GitSuggestionPlan (Get-GitRepositoryContext)
+        if ($finalPlan.Entries.Count -gt 0) { throw 'new pending changes remain after the combined push.' }
+        Write-Output ("Autopush complete: {0} file(s), 1 commit, 1 push to origin/{1}." -f $script:autoPushCompleted, (Format-PushBranch $initialBranch))
+        exit 0
+    }
+    catch { Stop-Autopush $_.Exception.Message }
+}
 
 foreach ($planned in @($initialPlan.Suggestions)) {
     $number = $script:autoPushCompleted + 1
@@ -166,7 +216,7 @@ foreach ($planned in @($initialPlan.Suggestions)) {
             }
 
             $sameCommitPaths = (($observed.CommitPaths -join [string][char]0) -ceq ($expected.CommitPaths -join [string][char]0))
-            if ($observed.NeedsAdd -ne $expected.NeedsAdd -or $observed.Message -cne $expected.Message -or -not $sameCommitPaths) {
+            if ($observed.NeedsAdd -ne $expected.NeedsAdd -or $observed.Message -cne $expected.Message -or $observed.DiffHash -cne $expected.DiffHash -or -not $sameCommitPaths) {
                 throw "the suggestion for '$($expected.Path)' changed while autopush was running; refusing to use a stale suggestion."
             }
         }

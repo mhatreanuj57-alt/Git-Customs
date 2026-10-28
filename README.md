@@ -182,11 +182,13 @@ There is no `--yes` or approval bypass for `action-fix`.
 
 ## git suggest
 
-Previews a per-file sequence of `git add`, `git commit`, and `git push` commands.
-Nothing is executed.
+Previews diff-based Conventional Commit messages and the corresponding Git commands.
+Nothing is executed. By default it suggests one commit per changed file; `--combined`
+suggests one commit for all pending paths.
 
 ```powershell
 git suggest
+git suggest --combined
 ```
 
 The output is a reviewable plan. Commands use literal path arguments, so spaces,
@@ -198,17 +200,24 @@ Requirements: a Git worktree with an `origin` remote and an attached branch.
 
 ## git autopush
 
-Re-detects the pending changes, stages each file, creates one commit per file, and
-pushes after each successful commit.
+Re-detects the pending changes, shows the diff-based commit messages, and asks for
+confirmation before staging, committing, and pushing. By default it creates one
+commit per file and pushes each successful commit. `--combined` creates one commit
+and one push for all pending paths.
 
 ```powershell
 git autopush
+git autopush --combined
 ```
 
-`autopush` re-checks the repository before every file. If the branch, origin URL, or
-pending plan changes, it stops. A failed add, commit, or push stops the run
-immediately. Completed files remain committed and pushed; remaining files stay
-pending. There is no rollback.
+Messages use Conventional Commit types and changed content where it can be inferred;
+binary changes get add, update, or remove asset messages. Unclear text changes use a
+file-scoped fallback without a commit counter. The diff content is not printed.
+
+`autopush` re-checks the repository before every file in the default mode. If the
+branch, origin URL, or pending plan changes, it stops. A failed add, commit, or push
+stops the run immediately. Completed files remain committed and pushed; remaining
+files stay pending. There is no rollback.
 
 Use `git suggest` first when you want to inspect the exact plan, or when you do not
 want any commits created.

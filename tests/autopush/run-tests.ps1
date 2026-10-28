@@ -63,7 +63,7 @@ function Run-Git {
 }
 
 function Invoke-Autopush {
-    param([string]$WorkingDirectory, [string]$Arguments = 'autopush')
+    param([string]$WorkingDirectory, [string]$Arguments = 'autopush', [string]$Answer = 'y')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'git'
     $psi.Arguments = $Arguments
@@ -71,9 +71,12 @@ function Invoke-Autopush {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $psi.RedirectStandardInput = $true
     $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding $false
     $psi.StandardErrorEncoding = New-Object System.Text.UTF8Encoding $false
     $process = [System.Diagnostics.Process]::Start($psi)
+    $process.StandardInput.WriteLine($Answer)
+    $process.StandardInput.Close()
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
@@ -164,6 +167,17 @@ try {
     Check-Equal $cleanHead (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim() 'clean repo does not change HEAD'
     Check-Equal '0' ([string](Get-PushCount $origin)) 'clean repo does not push'
 
+    Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'should not commit'
+    $cancelHead = (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim()
+    $cancelStatus = (Run-Git $work @('status', '--porcelain=v1') | Out-String).Trim()
+    $cancelled = Invoke-Autopush $work -Answer 'n'
+    Check-Equal 0 $cancelled.ExitCode 'autopush cancellation exits cleanly'
+    Check-Contains $cancelled.Stdout 'Autopush cancelled' 'autopush reports cancellation'
+    Check-Equal $cancelHead (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim() 'cancelled autopush does not commit'
+    Check-Equal $cancelStatus (Run-Git $work @('status', '--porcelain=v1') | Out-String).Trim() 'cancelled autopush does not stage files'
+    Check-Equal '0' ([string](Get-PushCount $origin)) 'cancelled autopush does not push'
+    Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'initial'
+
     # Outside repository
     $outside = Invoke-Autopush $notRepo
     Check-Equal 1 $outside.ExitCode 'outside a repository exits 1'
@@ -232,19 +246,19 @@ try {
 
     $log = (Run-Git $work @('log', '--format=%s') | Out-String)
     foreach ($message in @(
-        'Update tracked.txt (file commit #2)',
-        'Delete delete me.txt (file commit #2)',
-        'Delete staged delete.txt (file commit #2)',
-        'Update staged only.txt (file commit #2)',
-        'Rename rename old.txt -> rename new.txt (file commit #2)',
-        'Update z-staged.txt (file commit #2)',
-        'Add untracked file.txt (file commit #1)',
-        "Add quote'file.txt (file commit #1)",
-        'Add $dollar.txt (file commit #1)',
-        'Add glob[a].txt (file commit #1)',
-        'Add globa.txt (file commit #1)',
-        'Add -leading.txt (file commit #1)',
-        'Add sub dir/space name.js (file commit #1)'
+        'chore: update tracked.txt content',
+        'refactor: remove delete me.txt',
+        'refactor: remove staged delete.txt',
+        'chore: update staged only.txt content',
+        'refactor: rename rename old.txt to rename new.txt',
+        'chore: update z-staged.txt content',
+        'chore: add untracked file.txt',
+        "chore: add quote'file.txt",
+        'chore: add $dollar.txt',
+        'chore: add glob[a].txt',
+        'chore: add globa.txt',
+        'chore: add -leading.txt',
+        'chore: add space name.js'
     )) {
         Check-Contains $log $message "autopush created commit: $message"
     }
@@ -255,7 +269,7 @@ try {
     Check-Equal '1' ([string]$firstNewNames.Count) 'first commit contains exactly one file'
     Check (-not ($firstNewNames -contains 'z-staged.txt')) 'pre-staged unrelated file is not swept into another commit'
 
-    $globHash = @(Run-Git $work @('log', '--fixed-strings', '--grep=Add glob[a].txt', '--format=%H'))[0]
+    $globHash = @(Run-Git $work @('log', '--fixed-strings', '--grep=chore: add glob[a].txt', '--format=%H'))[0]
     $globNames = @(Run-Git $work @('show', '--pretty=format:', '--name-only', $globHash) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     Check ($globNames -contains 'glob[a].txt') 'literal glob filename is committed'
     Check (-not ($globNames -contains 'globa.txt')) 'literal glob filename does not match another file'
@@ -273,8 +287,8 @@ try {
     $secondChanges = Invoke-Autopush $work
     Check-Equal 0 $secondChanges.ExitCode 'second change run exits 0'
     Check-Contains $secondChanges.Stdout 'Autopush complete: 2 file(s), 2 commit(s), 2 push(es) to origin/main.' 'second change summary is correct'
-    Check-Contains (Run-Git $work @('log', '--format=%s') | Out-String) 'Update tracked.txt (file commit #3)' 'persistent count reaches #3'
-    Check-Contains (Run-Git $work @('log', '--format=%s') | Out-String) 'Update rename new.txt (file commit #3)' 'rename count reaches #3'
+    Check-Contains (Run-Git $work @('log', '--format=%s') | Out-String) 'chore: update tracked.txt content' 'modified file message is retained'
+    Check-Contains (Run-Git $work @('log', '--format=%s') | Out-String) 'refactor: rename rename old.txt to rename new.txt' 'rename message is retained'
     Check-Equal '15' ([string](Get-PushCount $origin)) 'second change run pushes each commit'
     Check-Equal '16' ((Run-Git $work @('rev-list', '--count', 'HEAD') | Out-String).Trim()) 'second change run adds exactly two commits'
 
@@ -285,7 +299,7 @@ try {
     $feature = Invoke-Autopush $work
     Check-Equal 0 $feature.ExitCode 'feature branch autopush exits 0'
     Check-Contains $feature.Stdout 'Autopush complete: 1 file(s), 1 commit(s), 1 push(es) to origin/feature/test.' 'feature branch summary uses the current branch'
-    Check-Contains (Run-Git $work @('log', '-1', '--format=%s') | Out-String) 'Update tracked.txt (file commit #4)' 'feature branch commit count is correct'
+    Check-Contains (Run-Git $work @('log', '-1', '--format=%s') | Out-String) 'chore: update tracked.txt content' 'feature branch commit message is correct'
     $featureHead = (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim()
     $featureRemote = (& git --git-dir=$origin rev-parse refs/heads/feature/test 2>$null | Out-String).Trim()
     Check-Equal $featureHead $featureRemote 'feature branch without upstream is pushed'
@@ -321,7 +335,7 @@ exit 0
     Check-Contains $commitFailure.Stderr 'simulated commit failure' 'commit failure includes Git error output'
     Check-Contains $commitFailure.Stdout 'Autopush summary: 1 of 3 file(s) completed; 1 commit(s) created; 1 push(es) completed to origin/main.' 'commit failure summary is accurate'
     Check-Equal '1' ([string](Get-PushCount $originFail)) 'commit failure pushes only the successful file'
-    Check-Contains (Run-Git $workFail @('log', '--format=%s') | Out-String) 'Update a.txt (file commit #2)' 'commit failure leaves successful commit'
+    Check-Contains (Run-Git $workFail @('log', '--format=%s') | Out-String) 'chore: update a.txt content' 'commit failure leaves successful commit'
     Check (-not ((Run-Git $workFail @('log', '--format=%s') | Out-String).Contains('Update c.txt'))) 'commit failure does not process later files'
     $failStatus = (Run-Git $workFail @('status', '--porcelain=v1') | Out-String)
     Check-Contains $failStatus 'b-fail.txt' 'failed file remains pending'
@@ -351,7 +365,7 @@ exit 1
     Check-Contains $pushFailure.Stdout 'Autopush summary: 0 of 2 file(s) completed; 1 commit(s) created; 0 push(es) completed to origin/main.' 'push failure summary is accurate'
     Check-Equal '0' ([string](Get-PushCount $originPushFail)) 'push failure does not push to origin'
     Check-Equal 'Initial commit' ((& git --git-dir=$originPushFail log -1 --format=%s refs/heads/main 2>$null | Out-String).Trim()) 'push failure leaves remote at previous commit'
-    Check-Contains (Run-Git $workPushFail @('log', '-1', '--format=%s') | Out-String) 'Update a.txt (file commit #2)' 'push failure leaves the local commit'
+    Check-Contains (Run-Git $workPushFail @('log', '-1', '--format=%s') | Out-String) 'chore: update a.txt content' 'push failure leaves the local commit'
     Check-Contains (Run-Git $workPushFail @('status', '--porcelain=v1') | Out-String) 'b.txt' 'push failure does not process later files'
 
     # --- Stale change stops before processing the next file ---
@@ -393,7 +407,7 @@ exit 0
     $empty = Invoke-Autopush $workEmpty
     Check-Equal 0 $empty.ExitCode 'autopush works in a repo with no commits'
     Check-Contains $empty.Stdout 'Autopush complete: 1 file(s), 1 commit(s), 1 push(es) to origin/main.' 'unborn repo summary is correct'
-    Check-Contains (Run-Git $workEmpty @('log', '--format=%s') | Out-String) 'Add first.txt (file commit #1)' 'unborn repo gets a file commit #1'
+    Check-Contains (Run-Git $workEmpty @('log', '--format=%s') | Out-String) 'chore: add first.txt' 'unborn repo gets a Conventional Commit message'
     Check-Equal '1' ([string](Get-PushCount $originEmpty)) 'unborn repo push reaches origin'
     Check (-not [string]::IsNullOrWhiteSpace((& git --git-dir=$originEmpty rev-parse refs/heads/main 2>$null | Out-String))) 'unborn repo creates remote main'
 
@@ -409,7 +423,7 @@ exit 0
     Set-Content -LiteralPath (Join-Path $workUnicode $unicodeName) -Value 'unicode'
     $unicodeRun = Invoke-Autopush $workUnicode
     Check-Equal 0 $unicodeRun.ExitCode 'non-ASCII filename autopush exits 0'
-    Check-Contains (Run-Git $workUnicode @('log', '--format=%s') | Out-String) ("Add $unicodeName (file commit #1)") 'non-ASCII filename commit message is correct'
+    Check-Contains (Run-Git $workUnicode @('log', '--format=%s') | Out-String) ("chore: add $unicodeName") 'non-ASCII filename commit message is correct'
     Check-Equal '' ((Run-Git $workUnicode @('status', '--porcelain=v1') | Out-String).Trim()) 'non-ASCII filename leaves a clean tree'
     Check-Equal '1' ([string](Get-PushCount $originUnicode)) 'non-ASCII filename is pushed'
 
@@ -417,6 +431,43 @@ exit 0
     $unknown = Invoke-Autopush $work -Arguments 'autopush --bogus'
     Check-Equal 1 $unknown.ExitCode 'unknown argument exits 1'
     Check-Contains $unknown.Stderr 'unknown argument' 'unknown argument is rejected'
+
+    # --- Combined diff message and single push ---
+    $originCombined = Join-Path $base 'origin-combined.git'
+    $workCombined = Join-Path $base 'combined repo'
+    New-BareOrigin $originCombined
+    New-WorkRepo $workCombined $originCombined
+    Set-Content -LiteralPath (Join-Path $workCombined 'app.js') -Value 'const loginRedirect = "/old"'
+    Set-Content -LiteralPath (Join-Path $workCombined 'style.css') -Value 'color: red'
+    New-InitialCommit $workCombined
+    Reset-PushCount $originCombined
+    Set-Content -LiteralPath (Join-Path $workCombined 'app.js') -Value 'const loginRedirect = "/home"'
+    Set-Content -LiteralPath (Join-Path $workCombined 'style.css') -Value 'color: blue'
+    $combined = Invoke-Autopush $workCombined -Arguments 'autopush --combined'
+    Check-Equal 0 $combined.ExitCode 'combined autopush succeeds'
+    Check-Contains $combined.Stdout 'combined: fix: correct login redirect; update style.css content' 'combined message summarizes changed diffs'
+    Check-Contains (Run-Git $workCombined @('log', '-1', '--format=%s') | Out-String) 'fix: correct login redirect; update style.css content' 'combined message is committed'
+    Check-Equal '1' ([string](Get-PushCount $originCombined)) 'combined autopush pushes once'
+    Check-Equal '2' ((Run-Git $workCombined @('rev-list', '--count', 'HEAD') | Out-String).Trim()) 'combined autopush creates one commit'
+
+    # --- Binary add, update, and delete use content-free subjects ---
+    $originBinary = Join-Path $base 'origin-binary.git'
+    $workBinary = Join-Path $base 'binary repo'
+    New-BareOrigin $originBinary
+    New-WorkRepo $workBinary $originBinary
+    [System.IO.File]::WriteAllBytes((Join-Path $workBinary 'updated.bin'), [byte[]](1, 0, 3))
+    [System.IO.File]::WriteAllBytes((Join-Path $workBinary 'removed.bin'), [byte[]](4, 0, 6))
+    New-InitialCommit $workBinary
+    Reset-PushCount $originBinary
+    [System.IO.File]::WriteAllBytes((Join-Path $workBinary 'updated.bin'), [byte[]](7, 0, 9))
+    Remove-Item -LiteralPath (Join-Path $workBinary 'removed.bin')
+    [System.IO.File]::WriteAllBytes((Join-Path $workBinary 'added.bin'), [byte[]](10, 0, 12))
+    $binary = Invoke-Autopush $workBinary
+    Check-Equal 0 $binary.ExitCode 'binary autopush succeeds'
+    $binaryLog = Run-Git $workBinary @('log', '--format=%s') | Out-String
+    Check-Contains $binaryLog 'chore: update binary asset updated.bin' 'binary modification is identified'
+    Check-Contains $binaryLog 'chore: remove binary asset removed.bin' 'binary deletion is identified'
+    Check-Contains $binaryLog 'chore: add binary asset added.bin' 'binary addition is identified'
 }
 catch {
     $script:fail++

@@ -52,17 +52,19 @@ function Run-Git {
 }
 
 function Invoke-Suggest {
-    param([string]$WorkingDirectory)
+    param([string]$WorkingDirectory, [string]$Arguments = 'suggest')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'git'
-    $psi.Arguments = 'suggest'
+    $psi.Arguments = $Arguments
     $psi.WorkingDirectory = $WorkingDirectory
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $psi.RedirectStandardInput = $true
     $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding $false
     $psi.StandardErrorEncoding = New-Object System.Text.UTF8Encoding $false
     $process = [System.Diagnostics.Process]::Start($psi)
+    $process.StandardInput.Close()
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
     $process.WaitForExit()
@@ -170,20 +172,20 @@ try {
 
     $expectedLines = @(
         "git add -- 'tracked.txt'",
-        "git commit -m 'Update tracked.txt (file commit #2)' -- 'tracked.txt'",
+        "git commit -m 'chore: update tracked.txt content' -- 'tracked.txt'",
         "git add -A -- 'delete me.txt'",
-        "git commit -m 'Delete delete me.txt (file commit #2)' -- 'delete me.txt'",
-        "git commit -m 'Delete staged delete.txt (file commit #2)' -- 'staged delete.txt'",
-        "git commit -m 'Update staged only.txt (file commit #2)' -- 'staged only.txt'",
-        "git commit -m 'Rename rename old.txt -> rename new.txt (file commit #2)' -- 'rename old.txt' 'rename new.txt'",
+        "git commit -m 'refactor: remove delete me.txt' -- 'delete me.txt'",
+        "git commit -m 'refactor: remove staged delete.txt' -- 'staged delete.txt'",
+        "git commit -m 'chore: update staged only.txt content' -- 'staged only.txt'",
+        "git commit -m 'refactor: rename rename old.txt to rename new.txt' -- 'rename old.txt' 'rename new.txt'",
         "git add -- 'untracked file.txt'",
-        "git commit -m 'Add untracked file.txt (file commit #1)' -- 'untracked file.txt'",
+        "git commit -m 'chore: add untracked file.txt' -- 'untracked file.txt'",
         "git add -- 'quote''file.txt'",
-        "git commit -m 'Add quote''file.txt (file commit #1)' -- 'quote''file.txt'",
+        "git commit -m 'chore: add quote''file.txt' -- 'quote''file.txt'",
         "git add -- '`$dollar.txt'",
-        "git commit -m 'Add `$dollar.txt (file commit #1)' -- '`$dollar.txt'",
+        "git commit -m 'chore: add `$dollar.txt' -- '`$dollar.txt'",
         "git add -- 'sub dir/space name.js'",
-        "git commit -m 'Add sub dir/space name.js (file commit #1)' -- 'sub dir/space name.js'",
+        "git commit -m 'chore: add space name.js' -- 'sub dir/space name.js'",
         'git push origin main'
     )
 
@@ -220,15 +222,15 @@ try {
 
     $log = (Run-Git $work @('log', '--format=%s') | Out-String)
     foreach ($message in @(
-        'Update tracked.txt (file commit #2)',
-        'Delete delete me.txt (file commit #2)',
-        'Delete staged delete.txt (file commit #2)',
-        'Update staged only.txt (file commit #2)',
-        'Rename rename old.txt -> rename new.txt (file commit #2)',
-        'Add untracked file.txt (file commit #1)',
-        "Add quote'file.txt (file commit #1)",
-        'Add $dollar.txt (file commit #1)',
-        'Add sub dir/space name.js (file commit #1)'
+        'chore: update tracked.txt content',
+        'refactor: remove delete me.txt',
+        'refactor: remove staged delete.txt',
+        'chore: update staged only.txt content',
+        'refactor: rename rename old.txt to rename new.txt',
+        'chore: add untracked file.txt',
+        "chore: add quote'file.txt",
+        'chore: add $dollar.txt',
+        'chore: add space name.js'
     )) {
         Check-Contains $log $message "commit exists: $message"
     }
@@ -248,8 +250,16 @@ try {
     Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'modified again'
     Set-Content -LiteralPath (Join-Path $work 'rename new.txt') -Value 'renamed modified'
     $next = Invoke-Suggest $work
-    Check-Contains $next.Stdout "git commit -m 'Update tracked.txt (file commit #3)' -- 'tracked.txt'" 'count increments to #3 after a successful commit'
-    Check-Contains $next.Stdout "git commit -m 'Update rename new.txt (file commit #3)' -- 'rename new.txt'" 'rename count persists via --follow'
+    Check-Contains $next.Stdout "git commit -m 'chore: update tracked.txt content' -- 'tracked.txt'" 'modified file message is diff based'
+    Check-Contains $next.Stdout "git commit -m 'chore: update rename new.txt content' -- 'rename new.txt'" 'renamed file message uses its current diff'
+
+    Set-Content -LiteralPath (Join-Path $work 'responsive-nav.css') -Value '@media (max-width: 600px) { .navigation { display: flex } }'
+    $semantic = Invoke-Suggest $work
+    Check-Contains $semantic.Stdout "git commit -m 'feat: add responsive navigation'" 'suggest describes responsive navigation from its diff'
+    $combinedSuggestion = Invoke-Suggest $work -Arguments 'suggest --combined'
+    Check-Equal '1' ([string](@($combinedSuggestion.Stdout -split "`r?`n" | Where-Object { $_ -match '^git commit -m ' }).Count)) 'combined suggest prints one commit'
+    Check-Contains $combinedSuggestion.Stdout 'feat: ' 'combined suggest uses a Conventional Commit type'
+    Check-Contains $combinedSuggestion.Stdout 'responsive navigation' 'combined suggest summarizes changed content'
 
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
@@ -261,7 +271,7 @@ try {
     Set-Content -LiteralPath (Join-Path $empty 'first.txt') -Value 'first'
     $emptyResult = Invoke-Suggest $empty
     Check-Equal 0 $emptyResult.ExitCode 'repo with no commits exits 0'
-    Check-Contains $emptyResult.Stdout "git commit -m 'Add first.txt (file commit #1)' -- 'first.txt'" 'new file in repo with no commits starts at #1'
+    Check-Contains $emptyResult.Stdout "git commit -m 'chore: add first.txt' -- 'first.txt'" 'new file in repo with no commits gets a Conventional Commit message'
 }
 catch {
     $script:fail++

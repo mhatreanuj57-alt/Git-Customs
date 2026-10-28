@@ -95,7 +95,6 @@ function Get-GitRepositoryContext {
         OriginUrl  = $originUrl
         Branch     = $branch
         HasHead    = $hasHead
-        CountCache = @{}
     }
 }
 
@@ -158,33 +157,72 @@ function Get-GitPendingChanges {
     return [object[]]$entries.ToArray()
 }
 
-function Get-GitPriorCommitCount {
-    param(
-        [Parameter(Mandatory = $true)]$Context,
-        [Parameter(Mandatory = $true)][string]$Path
-    )
+function Get-GitDiffMessage {
+    param([Parameter(Mandatory = $true)]$Context, [Parameter(Mandatory = $true)]$Entry)
 
-    if (-not $Context.HasHead) {
-        return 0
+    $paths = @($Entry.Path)
+    if ($Entry.OldPath) { $paths = @($Entry.OldPath, $Entry.Path) }
+    $diffArgs = @('-C', $Context.RepoRoot, 'diff', '--binary', '--no-ext-diff', '--unified=0')
+    if ($Context.HasHead) { $diffArgs += @('HEAD', '--') } else { $diffArgs += @('--') }
+    $diffArgs += $paths
+    $diff = Invoke-GitDetect $diffArgs
+    $text = $diff.Output -join "`n"
+    $numstatArgs = @('-C', $Context.RepoRoot, 'diff', '--numstat', '--no-ext-diff')
+    if ($Context.HasHead) { $numstatArgs += @('HEAD', '--') } else { $numstatArgs += @('--') }
+    $numstatArgs += $paths
+    $numstat = (Invoke-GitDetect $numstatArgs).Output -join "`n"
+    $isBinary = $numstat -match '^[-\t]+-' -or $text -match '^Binary files '
+
+    $filePath = Join-Path $Context.RepoRoot $Entry.Path
+    $signature = $text
+    if (Test-Path -LiteralPath $filePath -PathType Leaf) {
+        $bytes = [System.IO.File]::ReadAllBytes($filePath)
+        $isBinary = $isBinary -or ($bytes -contains 0)
+        $signature = $Entry.Path + [string][char]0 + [string]$Entry.OldPath + [string][char]0 + [Convert]::ToBase64String($bytes)
+        if ($Entry.IsUntracked -and -not $isBinary) { $text = (([System.IO.File]::ReadAllText($filePath) -split "`r?`n" | ForEach-Object { "+$_" }) -join "`n") }
+    }
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { $fingerprint = [string]::Join('', [string[]]@($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($signature)) | ForEach-Object { $_.ToString('x2') })) }
+    finally { $hash.Dispose() }
+    $Entry | Add-Member -NotePropertyName DiffHash -NotePropertyValue $fingerprint -Force
+
+    $name = [System.IO.Path]::GetFileName($Entry.Path)
+    if ($name -match '(?i)(secret|credential|token|password|\.env)') { $name = 'configuration' }
+    if ($isBinary) {
+        if ($Entry.IsDeleted) { return "chore: remove binary asset $name" }
+        if ($Entry.IsUntracked -or $Entry.X -eq 'A') { return "chore: add binary asset $name" }
+        return "chore: update binary asset $name"
     }
 
-    if ($Context.CountCache.ContainsKey($Path)) {
-        return $Context.CountCache[$Path]
+    $changes = @($text -split "`r?`n" | Where-Object { $_ -match '^[+-]' -and $_ -notmatch '^(\+\+\+|---)' }) -join "`n"
+    if ($changes -match '(?i)(redirect|returnUrl|callbackUrl|loginRedirect)') { return 'fix: correct login redirect' }
+    if ($changes -match '(?i)(responsive|@media|breakpoint)' -and $changes -match '(?i)(nav|menu|header)') { return 'feat: add responsive navigation' }
+    if ($changes -match '(?i)(aria-|\brole=|keyboard|focus-visible)') { return 'fix: improve keyboard accessibility' }
+    if ($changes -match '(?i)(validation|validate|invalid)') { return 'fix: improve input validation' }
+
+    $symbol = $null
+    foreach ($pattern in @('(?i)(?:function|def|class)\s+([A-Za-z][A-Za-z0-9_-]{1,40})', '(?i)(?:const|let|var)\s+([A-Za-z][A-Za-z0-9_]{1,40})', '(?i)\.([A-Za-z][A-Za-z0-9_-]{1,40})\s*\{')) {
+        $match = [regex]::Match($changes, $pattern)
+        if ($match.Success -and $match.Groups[1].Value -notmatch '(?i)(secret|credential|token|password)') { $symbol = $match.Groups[1].Value; break }
     }
-
-    $result = Invoke-GitDetect @(
-        '--literal-pathspecs',
-        '-C', $Context.RepoRoot,
-        'log', '--follow', '--format=%H', '--', $Path
-    )
-    $count = 0
-
-    if ($result.ExitCode -eq 0) {
-        $count = @($result.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+    if ($symbol) {
+        if ($Entry.IsDeleted) { return "refactor: remove $symbol" }
+        if ($Entry.IsUntracked -or $Entry.X -eq 'A') { return "feat: add $symbol" }
+        return "refactor: update $symbol behavior"
     }
+    if ($Entry.IsDeleted) { return "refactor: remove $name" }
+    if ($Entry.IsUntracked -or $Entry.X -eq 'A') { return "chore: add $name" }
+    return "chore: update $name content"
+}
 
-    $Context.CountCache[$Path] = $count
-    return $count
+function Get-GitCombinedMessage {
+    param([Parameter(Mandatory = $true)][object[]]$Suggestions)
+    $types = @($Suggestions | ForEach-Object { if ($_.Message -match '^([a-z]+):') { $Matches[1] } } | Select-Object -Unique)
+    if ($types.Count -eq 1) { $type = $types[0] } elseif ($types -contains 'feat') { $type = 'feat' } elseif ($types -contains 'fix') { $type = 'fix' } else { $type = 'chore' }
+    $uniqueSubjects = @($Suggestions | ForEach-Object { $_.Message -replace '^[a-z]+:\s*', '' } | Select-Object -Unique)
+    $subjects = @($uniqueSubjects | Select-Object -First 3)
+    if ($uniqueSubjects.Count -gt 3) { $subjects += 'and related changes' }
+    return ('{0}: {1}' -f $type, ($subjects -join '; '))
 }
 
 function Get-GitSuggestionPlan {
@@ -235,35 +273,27 @@ function Get-GitSuggestionPlan {
             $needsAdd = $false
         }
 
-        if ($isRename -or $isCopy) {
-            $countPath = $oldPath
-        }
-        else {
-            $countPath = $path
-        }
-
-        $nextCount = (Get-GitPriorCommitCount $Context $countPath) + 1
-
         if ($isRename) {
             $kind = 'Rename'
-            $message = "Rename $oldPath -> $path (file commit #$nextCount)"
         }
         elseif ($isCopy) {
             $kind = 'Copy'
-            $message = "Copy $oldPath -> $path (file commit #$nextCount)"
         }
         elseif ($isDeleted) {
             $kind = 'Delete'
-            $message = "Delete $path (file commit #$nextCount)"
         }
         elseif ($isUntracked -or $x -eq 'A') {
             $kind = 'Add'
-            $message = "Add $path (file commit #$nextCount)"
         }
         else {
             $kind = 'Update'
-            $message = "Update $path (file commit #$nextCount)"
         }
+        $entry | Add-Member -NotePropertyName IsUntracked -NotePropertyValue $isUntracked -Force
+        $entry | Add-Member -NotePropertyName IsDeleted -NotePropertyValue $isDeleted -Force
+        $entry | Add-Member -NotePropertyName X -NotePropertyValue $x -Force
+        $message = Get-GitDiffMessage $Context $entry
+        if ($isRename) { $message = "refactor: rename $oldPath to $path" }
+        elseif ($isCopy) { $message = "feat: copy $oldPath to $path" }
 
         if ($isRename) {
             $commitPaths = @($oldPath, $path)
@@ -313,7 +343,7 @@ function Get-GitSuggestionPlan {
             CommitPaths         = [string[]]$commitPaths
             CommitArguments     = [string[]]$commitArguments
             Message             = $message
-            NextCount           = $nextCount
+            DiffHash            = $entry.DiffHash
             DisplayAddCommand   = $displayAddCommand
             DisplayCommitCommand = $displayCommitCommand
         })
