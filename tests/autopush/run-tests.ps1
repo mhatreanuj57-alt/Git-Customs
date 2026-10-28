@@ -460,6 +460,15 @@ exit 0
     Check-Equal '1' ([string](Get-PushCount $originCombined)) 'combined autopush pushes once'
     Check-Equal '2' ((Run-Git $workCombined @('rev-list', '--count', 'HEAD') | Out-String).Trim()) 'combined autopush creates one commit'
 
+    Set-Content -LiteralPath (Join-Path $workCombined 'app.js') -Value 'const loginRedirect = "/cancelled"'
+    $combinedCancelHead = (Run-Git $workCombined @('rev-parse', 'HEAD') | Out-String).Trim()
+    $combinedCancelStatus = (Run-Git $workCombined @('status', '--porcelain=v1') | Out-String).Trim()
+    $combinedCancelled = Invoke-Autopush $workCombined -Arguments 'autopush --combined' -Answer 'n'
+    Check-Contains $combinedCancelled.Stdout 'combined: fix: correct login redirect' 'combined plan is shown before cancellation'
+    Check-Equal $combinedCancelHead (Run-Git $workCombined @('rev-parse', 'HEAD') | Out-String).Trim() 'declined combined workflow does not commit'
+    Check-Equal $combinedCancelStatus (Run-Git $workCombined @('status', '--porcelain=v1') | Out-String).Trim() 'declined combined workflow does not stage'
+    Check-Equal '1' ([string](Get-PushCount $originCombined)) 'declined combined workflow does not push'
+
     # --- Binary add, update, and delete use content-free subjects ---
     $originBinary = Join-Path $base 'origin-binary.git'
     $workBinary = Join-Path $base 'binary repo'
