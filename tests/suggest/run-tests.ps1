@@ -272,6 +272,11 @@ try {
     Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'fix: improve keyboard accessibility'" 'focus-visible diff gets an accessibility subject'
     Remove-Item -LiteralPath $a11yPath
 
+    $validationPath = Join-Path $work 'validation-message.js'
+    Set-Content -LiteralPath $validationPath -Value 'const validationError = validateInput(value);'
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'fix: improve input validation'" 'validation diff gets a fix subject'
+    Remove-Item -LiteralPath $validationPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
