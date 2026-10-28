@@ -294,6 +294,13 @@ try {
     Check (-not $environmentSuggestion.Stdout.Contains('DO_NOT_PRINT_7c1a')) 'secret-like file content is not printed'
     Remove-Item -LiteralPath $environmentPath
 
+    $deletedPath = Join-Path $work 'removed-feature.js'
+    Set-Content -LiteralPath $deletedPath -Value 'function removedFeature() { return true; }'
+    Run-Git $work @('add', '--', 'removed-feature.js') | Out-Null
+    Run-Git $work @('commit', '-q', '-m', 'seed deletion fixture') | Out-Null
+    Remove-Item -LiteralPath $deletedPath
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'refactor: remove removed-feature.js'" 'deleted file gets a removal subject'
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
