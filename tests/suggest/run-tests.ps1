@@ -301,6 +301,12 @@ try {
     Remove-Item -LiteralPath $deletedPath
     Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'refactor: remove removed-feature.js'" 'deleted file gets a removal subject'
 
+    $contentPath = Join-Path $work 'private-content.txt'
+    Set-Content -LiteralPath $contentPath -Value 'CONTENT_SENTINEL_3c92 must stay out of preview output'
+    $contentSuggestion = Invoke-Suggest $work
+    Check (-not $contentSuggestion.Stdout.Contains('CONTENT_SENTINEL_3c92')) 'suggest never prints diff contents'
+    Remove-Item -LiteralPath $contentPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
