@@ -307,6 +307,13 @@ try {
     Check (-not $contentSuggestion.Stdout.Contains('CONTENT_SENTINEL_3c92')) 'suggest never prints diff contents'
     Remove-Item -LiteralPath $contentPath
 
+    $stagedPath = Join-Path $work 'staged-menu.js'
+    Set-Content -LiteralPath $stagedPath -Value 'function initializeStagedMenu() { return true; }'
+    Run-Git $work @('add', '--', 'staged-menu.js') | Out-Null
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'feat: add initializeStagedMenu'" 'staged addition is analyzed from its diff'
+    Run-Git $work @('rm', '--cached', '-q', '--', 'staged-menu.js') | Out-Null
+    Remove-Item -LiteralPath $stagedPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
