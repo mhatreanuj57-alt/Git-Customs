@@ -178,6 +178,15 @@ try {
     Check-Equal '0' ([string](Get-PushCount $origin)) 'cancelled autopush does not push'
     Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'initial'
 
+    Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'invalid answer must cancel'
+    $invalidHead = (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim()
+    $invalidStatus = (Run-Git $work @('status', '--porcelain=v1') | Out-String).Trim()
+    $invalidAnswer = Invoke-Autopush $work -Answer 'later'
+    Check-Contains $invalidAnswer.Stdout 'Autopush cancelled' 'non-affirmative response cancels autopush'
+    Check-Equal $invalidHead (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim() 'invalid confirmation does not commit'
+    Check-Equal $invalidStatus (Run-Git $work @('status', '--porcelain=v1') | Out-String).Trim() 'invalid confirmation does not stage'
+    Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'initial'
+
     # Outside repository
     $outside = Invoke-Autopush $notRepo
     Check-Equal 1 $outside.ExitCode 'outside a repository exits 1'
