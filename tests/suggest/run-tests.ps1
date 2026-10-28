@@ -322,6 +322,15 @@ try {
     Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'refactor: update modifyFeature behavior'" 'modified function diff names its symbol'
     Run-Git $work @('checkout', '--', 'modified-symbol.js') | Out-Null
 
+    $distinctOne = Join-Path $work 'distinct-redirect.js'
+    $distinctTwo = Join-Path $work 'distinct-validation.js'
+    Set-Content -LiteralPath $distinctOne -Value 'const loginRedirect = "/account";'
+    Set-Content -LiteralPath $distinctTwo -Value 'const validationResult = validateInput(value);'
+    $distinctSuggestions = Invoke-Suggest $work
+    Check-Contains $distinctSuggestions.Stdout "git commit -m 'fix: correct login redirect'" 'first changed file gets its own subject'
+    Check-Contains $distinctSuggestions.Stdout "git commit -m 'fix: improve input validation'" 'second changed file gets its own subject'
+    Remove-Item -LiteralPath $distinctOne, $distinctTwo
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
