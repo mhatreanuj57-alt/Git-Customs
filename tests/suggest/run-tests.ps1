@@ -331,6 +331,11 @@ try {
     Check-Contains $distinctSuggestions.Stdout "git commit -m 'fix: improve input validation'" 'second changed file gets its own subject'
     Remove-Item -LiteralPath $distinctOne, $distinctTwo
 
+    $summaryFiles = @('summary-one.js', 'summary-two.js', 'summary-three.js', 'summary-four.js')
+    foreach ($summaryFile in $summaryFiles) { Set-Content -LiteralPath (Join-Path $work $summaryFile) -Value "function $([IO.Path]::GetFileNameWithoutExtension($summaryFile))() { return true; }" }
+    Check-Contains (Invoke-Suggest $work -Arguments 'suggest --combined').Stdout 'and related changes' 'long combined summaries indicate additional changes'
+    foreach ($summaryFile in $summaryFiles) { Remove-Item -LiteralPath (Join-Path $work $summaryFile) }
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
