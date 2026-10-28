@@ -1,6 +1,6 @@
 {
   "name": "anuj-custom-git-command-list",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Tested Git extensions for Windows: GitHub Actions workflow helpers, safe per-file autopush, PR and release workflows, repository health checks, and more.",
   "keywords": [
     "git",
