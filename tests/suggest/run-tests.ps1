@@ -314,6 +314,14 @@ try {
     Run-Git $work @('rm', '--cached', '-q', '--', 'staged-menu.js') | Out-Null
     Remove-Item -LiteralPath $stagedPath
 
+    $modifiedSymbolPath = Join-Path $work 'modified-symbol.js'
+    Set-Content -LiteralPath $modifiedSymbolPath -Value 'function modifyFeature() { return 1; }'
+    Run-Git $work @('add', '--', 'modified-symbol.js') | Out-Null
+    Run-Git $work @('commit', '-q', '-m', 'seed symbol fixture') | Out-Null
+    Set-Content -LiteralPath $modifiedSymbolPath -Value 'function modifyFeature() { return 2; }'
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'refactor: update modifyFeature behavior'" 'modified function diff names its symbol'
+    Run-Git $work @('checkout', '--', 'modified-symbol.js') | Out-Null
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
