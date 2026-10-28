@@ -341,6 +341,9 @@ try {
     Check-Contains (Invoke-Suggest $work -Arguments 'suggest --combined').Stdout "'quoted '' menu.js'" 'combined path quoting preserves apostrophes'
     Remove-Item -LiteralPath $quotedPath
 
+    $combinedOutput = (Invoke-Suggest $work -Arguments 'suggest --combined').Stdout
+    Check-Equal '1' ([string](@($combinedOutput -split "`r?`n" | Where-Object { $_ -match '^git push origin ' }).Count)) 'combined suggest prints one push command'
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
