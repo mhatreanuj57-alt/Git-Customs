@@ -277,6 +277,11 @@ try {
     Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'fix: improve input validation'" 'validation diff gets a fix subject'
     Remove-Item -LiteralPath $validationPath
 
+    $symbolPath = Join-Path $work 'symbol-message.js'
+    Set-Content -LiteralPath $symbolPath -Value 'function initializeMenu() { return true; }'
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'feat: add initializeMenu'" 'new function diff identifies its symbol'
+    Remove-Item -LiteralPath $symbolPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
