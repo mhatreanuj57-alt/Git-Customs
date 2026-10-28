@@ -267,6 +267,11 @@ try {
     Check-Contains $redirectMessage.Stdout "git commit -m 'fix: correct login redirect'" 'redirect diff gets a specific fix subject'
     Remove-Item -LiteralPath $redirectPath
 
+    $a11yPath = Join-Path $work 'a11y-message.css'
+    Set-Content -LiteralPath $a11yPath -Value '.control:focus-visible { outline: 2px solid blue }'
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'fix: improve keyboard accessibility'" 'focus-visible diff gets an accessibility subject'
+    Remove-Item -LiteralPath $a11yPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
