@@ -299,7 +299,7 @@ try {
     Run-Git $work @('add', '--', 'removed-feature.js') | Out-Null
     Run-Git $work @('commit', '-q', '-m', 'seed deletion fixture') | Out-Null
     Remove-Item -LiteralPath $deletedPath
-    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'refactor: remove removed-feature.js'" 'deleted file gets a removal subject'
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'refactor: remove removedFeature'" 'deleted symbol gets a removal subject'
 
     $contentPath = Join-Path $work 'private-content.txt'
     Set-Content -LiteralPath $contentPath -Value 'CONTENT_SENTINEL_3c92 must stay out of preview output'
