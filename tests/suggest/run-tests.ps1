@@ -282,6 +282,11 @@ try {
     Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'feat: add initializeMenu'" 'new function diff identifies its symbol'
     Remove-Item -LiteralPath $symbolPath
 
+    $genericPath = Join-Path $work 'generic-message.txt'
+    Set-Content -LiteralPath $genericPath -Value 'plain content without a feature signal'
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'chore: add generic-message.txt'" 'unclassified text addition uses a chore fallback'
+    Remove-Item -LiteralPath $genericPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
