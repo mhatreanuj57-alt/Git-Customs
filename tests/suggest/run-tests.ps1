@@ -261,6 +261,12 @@ try {
     Check-Contains $combinedSuggestion.Stdout 'feat: ' 'combined suggest uses a Conventional Commit type'
     Check-Contains $combinedSuggestion.Stdout 'responsive navigation' 'combined suggest summarizes changed content'
 
+    $redirectPath = Join-Path $work 'redirect-message.js'
+    Set-Content -LiteralPath $redirectPath -Value 'const loginRedirect = "/signin";'
+    $redirectMessage = Invoke-Suggest $work
+    Check-Contains $redirectMessage.Stdout "git commit -m 'fix: correct login redirect'" 'redirect diff gets a specific fix subject'
+    Remove-Item -LiteralPath $redirectPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
