@@ -230,6 +230,7 @@ try {
     Check-Contains $mixed.Stdout '# Pending: 13 file(s)' 'autopush counts 13 files'
     Check-Contains $mixed.Stdout 'added 0, modified 4, deleted 2, untracked 7' 'autopush reports categories'
     Check-Contains $mixed.Stdout 'staged 4' 'autopush reports staged files'
+    Check-Contains $mixed.Stdout 'tracked.txt: chore: update tracked.txt content' 'autopush confirms each proposed per-file message'
     Check-Contains $mixed.Stdout 'Autopush complete: 13 file(s), 13 commit(s), 13 push(es) to origin/main.' 'autopush final summary is correct'
     Check-Equal '13' ([string](Get-PushCount $origin)) 'each successful commit is pushed immediately'
     Check-Equal '0' (@($mixed.Stdout -split "`r?`n" | Where-Object { $_ -match '^  push    ' }).Count - 13) 'prints one push line per file'
