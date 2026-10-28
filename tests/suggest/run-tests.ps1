@@ -287,6 +287,13 @@ try {
     Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'chore: add generic-message.txt'" 'unclassified text addition uses a chore fallback'
     Remove-Item -LiteralPath $genericPath
 
+    $environmentPath = Join-Path $work '.env.local'
+    Set-Content -LiteralPath $environmentPath -Value 'API_KEY=DO_NOT_PRINT_7c1a'
+    $environmentSuggestion = Invoke-Suggest $work
+    Check-Contains $environmentSuggestion.Stdout "git commit -m 'chore: add configuration'" 'sensitive filename is sanitized in the subject'
+    Check (-not $environmentSuggestion.Stdout.Contains('DO_NOT_PRINT_7c1a')) 'secret-like file content is not printed'
+    Remove-Item -LiteralPath $environmentPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
