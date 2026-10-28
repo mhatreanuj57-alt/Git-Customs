@@ -492,6 +492,10 @@ exit 0
     Check-Contains $binaryLog 'chore: update binary asset updated.bin' 'binary modification is identified'
     Check-Contains $binaryLog 'chore: remove binary asset removed.bin' 'binary deletion is identified'
     Check-Contains $binaryLog 'chore: add binary asset added.bin' 'binary addition is identified'
+
+    Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'uppercase confirmation accepted'
+    $uppercaseYes = Invoke-Autopush $work -Answer 'YES'
+    Check-Equal 0 $uppercaseYes.ExitCode 'uppercase affirmative confirmation is accepted'
 }
 catch {
     $script:fail++
