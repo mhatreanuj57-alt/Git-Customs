@@ -336,6 +336,11 @@ try {
     Check-Contains (Invoke-Suggest $work -Arguments 'suggest --combined').Stdout 'and related changes' 'long combined summaries indicate additional changes'
     foreach ($summaryFile in $summaryFiles) { Remove-Item -LiteralPath (Join-Path $work $summaryFile) }
 
+    $quotedPath = Join-Path $work "quoted ' menu.js"
+    Set-Content -LiteralPath $quotedPath -Value 'function addQuotedMenu() { return true; }'
+    Check-Contains (Invoke-Suggest $work -Arguments 'suggest --combined').Stdout "'quoted '' menu.js'" 'combined path quoting preserves apostrophes'
+    Remove-Item -LiteralPath $quotedPath
+
     # Empty repository with an origin and an untracked file.
     $empty = Join-Path $base 'empty repo'
     & git init -q -b main $empty
