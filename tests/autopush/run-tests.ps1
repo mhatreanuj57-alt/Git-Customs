@@ -469,6 +469,11 @@ exit 0
     Check-Equal $combinedCancelStatus (Run-Git $workCombined @('status', '--porcelain=v1') | Out-String).Trim() 'declined combined workflow does not stage'
     Check-Equal '1' ([string](Get-PushCount $originCombined)) 'declined combined workflow does not push'
 
+    Set-Content -LiteralPath (Join-Path $workCombined 'app.js') -Value 'const loginRedirect = "/home"; // AUTOPUSH_CONTENT_SENTINEL'
+    $privateAutopush = Invoke-Autopush $workCombined -Arguments 'autopush --combined'
+    Check-Equal 0 $privateAutopush.ExitCode 'combined autopush handles private diff content'
+    Check (-not $privateAutopush.Stdout.Contains('AUTOPUSH_CONTENT_SENTINEL')) 'autopush does not print diff contents'
+
     # --- Binary add, update, and delete use content-free subjects ---
     $originBinary = Join-Path $base 'origin-binary.git'
     $workBinary = Join-Path $base 'binary repo'
