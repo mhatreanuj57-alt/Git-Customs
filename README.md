@@ -191,7 +191,11 @@ git suggest
 git suggest --combined
 ```
 
-The output is a reviewable plan. Commands use literal path arguments, so spaces,
+The output lists each changed path and its status, summarizes the observed diff, and
+recommends a Conventional Commit message. Messages stay conservative when the diff
+does not reveal intent; binary files are identified without displaying their contents.
+The default plan keeps changes in separate per-file commits, so unrelated edits remain
+separate. `--combined` still previews one commit for all pending paths. Commands use literal path arguments, so spaces,
 quotes, dollar signs, leading dashes, brackets, and Git-glob characters are treated as
 filename characters rather than shell or pathspec syntax. Staged, modified, deleted,
 renamed, copied, and untracked files are detected. Unresolved conflicts are rejected.
