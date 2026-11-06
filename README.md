@@ -204,22 +204,26 @@ Requirements: a Git worktree with an `origin` remote and an attached branch.
 
 ## git autopush
 
-Re-detects the pending changes, shows the diff-based commit messages, and asks for
-confirmation before staging, committing, and pushing. By default it creates one
-commit per file and pushes each successful commit. `--combined` creates one commit
-and one push for all pending paths.
+Detects the current branch and its configured push remote, checks for remote updates,
+then displays each changed file, a summary of its diff, and its proposed Conventional
+Commit message before asking for confirmation. By default it creates one commit per
+file and pushes each successful commit. `--combined` creates one commit and one push
+for all pending paths.
 
 ```powershell
 git autopush
 git autopush --combined
 ```
 
-Messages use Conventional Commit types and changed content where it can be inferred;
-binary changes get add, update, or remove asset messages. Unclear text changes use a
-file-scoped fallback without a commit counter. The diff content is not printed.
+Messages use changed content where it can be inferred; unclear changes receive a
+conservative fallback, and binary changes are described without printing their
+contents. The command fetches and checks the target branch before staging and again
+before each push. If the remote is ahead or has diverged, it stops without committing
+and recommends `git pull --rebase <remote> <branch>`. A normal push is used; force-push
+is never attempted.
 
 `autopush` re-checks the repository before every file in the default mode. If the
-branch, origin URL, or pending plan changes, it stops. A failed add, commit, or push
+branch, push remote, or pending plan changes, it stops. A failed add, commit, or push
 stops the run immediately. Completed files remain committed and pushed; remaining
 files stay pending. There is no rollback.
 
