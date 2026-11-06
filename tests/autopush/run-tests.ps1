@@ -239,7 +239,10 @@ try {
     Check-Contains $mixed.Stdout '# Pending: 13 file(s)' 'autopush counts 13 files'
     Check-Contains $mixed.Stdout 'added 0, modified 4, deleted 2, untracked 7' 'autopush reports categories'
     Check-Contains $mixed.Stdout 'staged 4' 'autopush reports staged files'
-    Check-Contains $mixed.Stdout 'tracked.txt: chore: update tracked.txt content' 'autopush confirms each proposed per-file message'
+    Check-Contains $mixed.Stdout 'Proposed commit: chore: update repository content' 'autopush confirms a diff-based per-file message'
+    Check-Contains $mixed.Stdout 'Changed files:' 'autopush lists changed files before confirmation'
+    Check-Contains $mixed.Stdout 'Summary: Changes text; purpose is unclear from the diff.' 'autopush summarizes a diff without inventing intent'
+    Check-Contains $mixed.Stdout '# Remote checked: origin/main' 'autopush checks the configured push remote'
     Check-Contains $mixed.Stdout 'Autopush complete: 13 file(s), 13 commit(s), 13 push(es) to origin/main.' 'autopush final summary is correct'
     Check-Equal '13' ([string](Get-PushCount $origin)) 'each successful commit is pushed immediately'
     Check-Equal '0' (@($mixed.Stdout -split "`r?`n" | Where-Object { $_ -match '^  push    ' }).Count - 13) 'prints one push line per file'
@@ -256,19 +259,10 @@ try {
 
     $log = (Run-Git $work @('log', '--format=%s') | Out-String)
     foreach ($message in @(
-        'chore: update tracked.txt content',
-        'refactor: remove delete me.txt',
-        'refactor: remove staged delete.txt',
-        'chore: update staged only.txt content',
+        'chore: update repository content',
+        'chore: remove repository content',
         'refactor: rename rename old.txt to rename new.txt',
-        'chore: update z-staged.txt content',
-        'chore: add untracked file.txt',
-        "chore: add quote'file.txt",
-        'chore: add $dollar.txt',
-        'chore: add glob[a].txt',
-        'chore: add globa.txt',
-        'chore: add -leading.txt',
-        'chore: add space name.js'
+        'chore: add repository content'
     )) {
         Check-Contains $log $message "autopush created commit: $message"
     }
@@ -279,7 +273,7 @@ try {
     Check-Equal '1' ([string]$firstNewNames.Count) 'first commit contains exactly one file'
     Check (-not ($firstNewNames -contains 'z-staged.txt')) 'pre-staged unrelated file is not swept into another commit'
 
-    $globHash = @(Run-Git $work @('log', '--fixed-strings', '--grep=chore: add glob[a].txt', '--format=%H'))[0]
+    $globHash = @(Run-Git $work @('--literal-pathspecs', 'log', '--format=%H', '--', 'glob[a].txt'))[0]
     $globNames = @(Run-Git $work @('show', '--pretty=format:', '--name-only', $globHash) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     Check ($globNames -contains 'glob[a].txt') 'literal glob filename is committed'
     Check (-not ($globNames -contains 'globa.txt')) 'literal glob filename does not match another file'
@@ -297,7 +291,7 @@ try {
     $secondChanges = Invoke-Autopush $work
     Check-Equal 0 $secondChanges.ExitCode 'second change run exits 0'
     Check-Contains $secondChanges.Stdout 'Autopush complete: 2 file(s), 2 commit(s), 2 push(es) to origin/main.' 'second change summary is correct'
-    Check-Contains (Run-Git $work @('log', '--format=%s') | Out-String) 'chore: update tracked.txt content' 'modified file message is retained'
+    Check-Contains (Run-Git $work @('log', '--format=%s') | Out-String) 'chore: update repository content' 'modified file message stays conservative when purpose is unclear'
     Check-Contains (Run-Git $work @('log', '--format=%s') | Out-String) 'refactor: rename rename old.txt to rename new.txt' 'rename message is retained'
     Check-Equal '15' ([string](Get-PushCount $origin)) 'second change run pushes each commit'
     Check-Equal '16' ((Run-Git $work @('rev-list', '--count', 'HEAD') | Out-String).Trim()) 'second change run adds exactly two commits'
@@ -309,7 +303,7 @@ try {
     $feature = Invoke-Autopush $work
     Check-Equal 0 $feature.ExitCode 'feature branch autopush exits 0'
     Check-Contains $feature.Stdout 'Autopush complete: 1 file(s), 1 commit(s), 1 push(es) to origin/feature/test.' 'feature branch summary uses the current branch'
-    Check-Contains (Run-Git $work @('log', '-1', '--format=%s') | Out-String) 'chore: update tracked.txt content' 'feature branch commit message is correct'
+    Check-Contains (Run-Git $work @('log', '-1', '--format=%s') | Out-String) 'chore: update repository content' 'feature branch commit message is correct'
     $featureHead = (Run-Git $work @('rev-parse', 'HEAD') | Out-String).Trim()
     $featureRemote = (& git --git-dir=$origin rev-parse refs/heads/feature/test 2>$null | Out-String).Trim()
     Check-Equal $featureHead $featureRemote 'feature branch without upstream is pushed'
@@ -345,7 +339,7 @@ exit 0
     Check-Contains $commitFailure.Stderr 'simulated commit failure' 'commit failure includes Git error output'
     Check-Contains $commitFailure.Stdout 'Autopush summary: 1 of 3 file(s) completed; 1 commit(s) created; 1 push(es) completed to origin/main.' 'commit failure summary is accurate'
     Check-Equal '1' ([string](Get-PushCount $originFail)) 'commit failure pushes only the successful file'
-    Check-Contains (Run-Git $workFail @('log', '--format=%s') | Out-String) 'chore: update a.txt content' 'commit failure leaves successful commit'
+    Check-Contains (Run-Git $workFail @('log', '--format=%s') | Out-String) 'chore: update repository content' 'commit failure leaves successful commit'
     Check (-not ((Run-Git $workFail @('log', '--format=%s') | Out-String).Contains('Update c.txt'))) 'commit failure does not process later files'
     $failStatus = (Run-Git $workFail @('status', '--porcelain=v1') | Out-String)
     Check-Contains $failStatus 'b-fail.txt' 'failed file remains pending'
@@ -370,12 +364,12 @@ exit 1
     Set-Content -LiteralPath (Join-Path $workPushFail 'b.txt') -Value 'changed b'
     $pushFailure = Invoke-Autopush $workPushFail
     Check-Equal 1 $pushFailure.ExitCode 'push failure exits 1'
-    Check-Contains $pushFailure.Stderr "git push origin main failed after committing 'a.txt'" 'push failure identifies the committed file'
+    Check-Contains $pushFailure.Stderr "git push origin HEAD:refs/heads/main failed after committing 'a.txt'" 'push failure identifies the committed file'
     Check-Contains $pushFailure.Stderr 'simulated push failure' 'push failure includes Git error output'
     Check-Contains $pushFailure.Stdout 'Autopush summary: 0 of 2 file(s) completed; 1 commit(s) created; 0 push(es) completed to origin/main.' 'push failure summary is accurate'
     Check-Equal '0' ([string](Get-PushCount $originPushFail)) 'push failure does not push to origin'
     Check-Equal 'Initial commit' ((& git --git-dir=$originPushFail log -1 --format=%s refs/heads/main 2>$null | Out-String).Trim()) 'push failure leaves remote at previous commit'
-    Check-Contains (Run-Git $workPushFail @('log', '-1', '--format=%s') | Out-String) 'chore: update a.txt content' 'push failure leaves the local commit'
+    Check-Contains (Run-Git $workPushFail @('log', '-1', '--format=%s') | Out-String) 'chore: update repository content' 'push failure leaves the local commit'
     Check-Contains (Run-Git $workPushFail @('status', '--porcelain=v1') | Out-String) 'b.txt' 'push failure does not process later files'
 
     # --- Stale change stops before processing the next file ---
@@ -408,6 +402,53 @@ exit 0
     Check (Test-Path -LiteralPath (Join-Path $workStale 'new-after.txt')) 'stale test created its concurrent change'
     Check-Contains (Run-Git $workStale @('status', '--porcelain=v1') | Out-String) 'b.txt' 'stale stop leaves later file pending'
 
+    # --- Remote-ahead preflight stops before confirmation, staging, or committing ---
+    $originAhead = Join-Path $base 'origin-ahead.git'
+    $workAhead = Join-Path $base 'remote-ahead repo'
+    $remoteUpdate = Join-Path $base 'remote-update repo'
+    New-BareOrigin $originAhead
+    New-WorkRepo $workAhead $originAhead
+    Set-Content -LiteralPath (Join-Path $workAhead 'tracked.txt') -Value 'initial'
+    New-InitialCommit $workAhead
+    & git clone -q --branch main $originAhead $remoteUpdate
+    if ($LASTEXITCODE -ne 0) { throw 'remote updater clone failed' }
+    Run-Git $remoteUpdate @('config', 'user.email', 'test@example.com') | Out-Null
+    Run-Git $remoteUpdate @('config', 'user.name', 'Test') | Out-Null
+    Set-Content -LiteralPath (Join-Path $remoteUpdate 'remote-change.txt') -Value 'remote update'
+    Run-Git $remoteUpdate @('add', '-A') | Out-Null
+    Run-Git $remoteUpdate @('commit', '-q', '-m', 'remote update') | Out-Null
+    Run-Git $remoteUpdate @('push', '-q', 'origin', 'main') | Out-Null
+    Reset-PushCount $originAhead
+    Set-Content -LiteralPath (Join-Path $workAhead 'tracked.txt') -Value 'local pending change'
+    $aheadHead = (Run-Git $workAhead @('rev-parse', 'HEAD') | Out-String).Trim()
+    $aheadStatus = (Run-Git $workAhead @('status', '--porcelain=v1') | Out-String).Trim()
+    $aheadResult = Invoke-Autopush $workAhead
+    Check-Equal 1 $aheadResult.ExitCode 'remote-ahead autopush stops safely'
+    Check-Contains $aheadResult.Stderr "git pull --rebase origin main" 'remote-ahead error gives safe sync guidance'
+    Check-Equal $aheadHead ((Run-Git $workAhead @('rev-parse', 'HEAD') | Out-String).Trim()) 'remote-ahead check does not create a commit'
+    Check-Equal $aheadStatus ((Run-Git $workAhead @('status', '--porcelain=v1') | Out-String).Trim()) 'remote-ahead check does not stage or discard local changes'
+    Check-Equal '0' ([string](Get-PushCount $originAhead)) 'remote-ahead check does not push'
+
+    # --- The configured upstream remote is selected automatically ---
+    $originAlternate = Join-Path $base 'origin-alternate.git'
+    $publishAlternate = Join-Path $base 'publish-alternate.git'
+    $workAlternate = Join-Path $base 'alternate-remote repo'
+    New-BareOrigin $originAlternate
+    New-BareOrigin $publishAlternate
+    New-WorkRepo $workAlternate $originAlternate
+    Set-Content -LiteralPath (Join-Path $workAlternate 'seed.txt') -Value 'initial'
+    New-InitialCommit $workAlternate
+    Run-Git $workAlternate @('remote', 'add', 'publish', $publishAlternate) | Out-Null
+    Run-Git $workAlternate @('push', '-q', '-u', 'publish', 'main') | Out-Null
+    Reset-PushCount $originAlternate
+    Reset-PushCount $publishAlternate
+    Set-Content -LiteralPath (Join-Path $workAlternate 'seed.txt') -Value 'change'
+    $alternate = Invoke-Autopush $workAlternate
+    Check-Equal 0 $alternate.ExitCode 'autopush detects configured upstream remote'
+    Check-Contains $alternate.Stdout 'publish/main' 'autopush reports detected remote name'
+    Check-Equal '1' ([string](Get-PushCount $publishAlternate)) 'autopush pushes to detected remote'
+    Check-Equal '0' ([string](Get-PushCount $originAlternate)) 'autopush leaves non-target remote unchanged'
+
     # --- Empty repository (unborn branch) ---
     $originEmpty = Join-Path $base 'origin-empty.git'
     $workEmpty = Join-Path $base 'empty repo'
@@ -417,7 +458,7 @@ exit 0
     $empty = Invoke-Autopush $workEmpty
     Check-Equal 0 $empty.ExitCode 'autopush works in a repo with no commits'
     Check-Contains $empty.Stdout 'Autopush complete: 1 file(s), 1 commit(s), 1 push(es) to origin/main.' 'unborn repo summary is correct'
-    Check-Contains (Run-Git $workEmpty @('log', '--format=%s') | Out-String) 'chore: add first.txt' 'unborn repo gets a Conventional Commit message'
+    Check-Contains (Run-Git $workEmpty @('log', '--format=%s') | Out-String) 'chore: add repository content' 'unborn repo gets a conservative Conventional Commit message'
     Check-Equal '1' ([string](Get-PushCount $originEmpty)) 'unborn repo push reaches origin'
     Check (-not [string]::IsNullOrWhiteSpace((& git --git-dir=$originEmpty rev-parse refs/heads/main 2>$null | Out-String))) 'unborn repo creates remote main'
 
@@ -433,7 +474,7 @@ exit 0
     Set-Content -LiteralPath (Join-Path $workUnicode $unicodeName) -Value 'unicode'
     $unicodeRun = Invoke-Autopush $workUnicode
     Check-Equal 0 $unicodeRun.ExitCode 'non-ASCII filename autopush exits 0'
-    Check-Contains (Run-Git $workUnicode @('log', '--format=%s') | Out-String) ("chore: add $unicodeName") 'non-ASCII filename commit message is correct'
+    Check-Contains (Run-Git $workUnicode @('log', '--format=%s') | Out-String) 'chore: add repository content' 'non-ASCII filename commit message avoids guessing from the filename'
     Check-Equal '' ((Run-Git $workUnicode @('status', '--porcelain=v1') | Out-String).Trim()) 'non-ASCII filename leaves a clean tree'
     Check-Equal '1' ([string](Get-PushCount $originUnicode)) 'non-ASCII filename is pushed'
 
@@ -455,8 +496,8 @@ exit 0
     Set-Content -LiteralPath (Join-Path $workCombined 'style.css') -Value 'color: blue'
     $combined = Invoke-Autopush $workCombined -Arguments 'autopush --combined'
     Check-Equal 0 $combined.ExitCode 'combined autopush succeeds'
-    Check-Contains $combined.Stdout 'combined: fix: correct login redirect; update style.css content' 'combined message summarizes changed diffs'
-    Check-Contains (Run-Git $workCombined @('log', '-1', '--format=%s') | Out-String) 'fix: correct login redirect; update style.css content' 'combined message is committed'
+    Check-Contains $combined.Stdout 'Proposed commit: fix: correct login redirect; update repository content' 'combined message summarizes changed diffs'
+    Check-Contains (Run-Git $workCombined @('log', '-1', '--format=%s') | Out-String) 'fix: correct login redirect; update repository content' 'combined message is committed'
     Check-Equal '1' ([string](Get-PushCount $originCombined)) 'combined autopush pushes once'
     Check-Equal '2' ((Run-Git $workCombined @('rev-list', '--count', 'HEAD') | Out-String).Trim()) 'combined autopush creates one commit'
 
@@ -464,7 +505,7 @@ exit 0
     $combinedCancelHead = (Run-Git $workCombined @('rev-parse', 'HEAD') | Out-String).Trim()
     $combinedCancelStatus = (Run-Git $workCombined @('status', '--porcelain=v1') | Out-String).Trim()
     $combinedCancelled = Invoke-Autopush $workCombined -Arguments 'autopush --combined' -Answer 'n'
-    Check-Contains $combinedCancelled.Stdout 'combined: fix: correct login redirect' 'combined plan is shown before cancellation'
+    Check-Contains $combinedCancelled.Stdout 'Proposed commit: fix: correct login redirect' 'combined plan is shown before cancellation'
     Check-Equal $combinedCancelHead (Run-Git $workCombined @('rev-parse', 'HEAD') | Out-String).Trim() 'declined combined workflow does not commit'
     Check-Equal $combinedCancelStatus (Run-Git $workCombined @('status', '--porcelain=v1') | Out-String).Trim() 'declined combined workflow does not stage'
     Check-Equal '1' ([string](Get-PushCount $originCombined)) 'declined combined workflow does not push'
