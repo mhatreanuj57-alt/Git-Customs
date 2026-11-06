@@ -169,23 +169,27 @@ try {
     Check-Contains $out 'added 0, modified 3, deleted 2, untracked 4' 'reports change categories'
     Check-Contains $out 'staged 3' 'reports staged files'
     Check-Contains $out '# Suggested commands only; nothing was executed.' 'states commands are not executed'
+    Check-Contains $out 'Changed files:' 'lists changed files'
+    Check-Contains $out 'modified: tracked.txt' 'shows file change status'
+    Check-Contains $out 'Summary: Changes text, but its purpose is unclear from the diff.' 'summarizes an unclear diff without inventing intent'
+    Check-Contains $out 'Recommended commit: chore: update repository content' 'recommends a conservative message for unclear content'
 
     $expectedLines = @(
         "git add -- 'tracked.txt'",
-        "git commit -m 'chore: update tracked.txt content' -- 'tracked.txt'",
+        "git commit -m 'chore: update repository content' -- 'tracked.txt'",
         "git add -A -- 'delete me.txt'",
-        "git commit -m 'refactor: remove delete me.txt' -- 'delete me.txt'",
-        "git commit -m 'refactor: remove staged delete.txt' -- 'staged delete.txt'",
-        "git commit -m 'chore: update staged only.txt content' -- 'staged only.txt'",
+        "git commit -m 'chore: remove repository content' -- 'delete me.txt'",
+        "git commit -m 'chore: remove repository content' -- 'staged delete.txt'",
+        "git commit -m 'chore: update repository content' -- 'staged only.txt'",
         "git commit -m 'refactor: rename rename old.txt to rename new.txt' -- 'rename old.txt' 'rename new.txt'",
         "git add -- 'untracked file.txt'",
-        "git commit -m 'chore: add untracked file.txt' -- 'untracked file.txt'",
+        "git commit -m 'chore: add repository content' -- 'untracked file.txt'",
         "git add -- 'quote''file.txt'",
-        "git commit -m 'chore: add quote''file.txt' -- 'quote''file.txt'",
+        "git commit -m 'chore: add repository content' -- 'quote''file.txt'",
         "git add -- '`$dollar.txt'",
-        "git commit -m 'chore: add `$dollar.txt' -- '`$dollar.txt'",
+        "git commit -m 'chore: add repository content' -- '`$dollar.txt'",
         "git add -- 'sub dir/space name.js'",
-        "git commit -m 'chore: add space name.js' -- 'sub dir/space name.js'",
+        "git commit -m 'chore: add repository content' -- 'sub dir/space name.js'",
         'git push origin main'
     )
 
@@ -222,15 +226,10 @@ try {
 
     $log = (Run-Git $work @('log', '--format=%s') | Out-String)
     foreach ($message in @(
-        'chore: update tracked.txt content',
-        'refactor: remove delete me.txt',
-        'refactor: remove staged delete.txt',
-        'chore: update staged only.txt content',
+        'chore: update repository content',
+        'chore: remove repository content',
         'refactor: rename rename old.txt to rename new.txt',
-        'chore: add untracked file.txt',
-        "chore: add quote'file.txt",
-        'chore: add $dollar.txt',
-        'chore: add space name.js'
+        'chore: add repository content'
     )) {
         Check-Contains $log $message "commit exists: $message"
     }
@@ -250,8 +249,9 @@ try {
     Set-Content -LiteralPath (Join-Path $work 'tracked.txt') -Value 'modified again'
     Set-Content -LiteralPath (Join-Path $work 'rename new.txt') -Value 'renamed modified'
     $next = Invoke-Suggest $work
-    Check-Contains $next.Stdout "git commit -m 'chore: update tracked.txt content' -- 'tracked.txt'" 'modified file message is diff based'
-    Check-Contains $next.Stdout "git commit -m 'chore: update rename new.txt content' -- 'rename new.txt'" 'renamed file message uses its current diff'
+    Check-Contains $next.Stdout "git commit -m 'chore: update repository content' -- 'tracked.txt'" 'unclear file message avoids inventing details'
+    Check-Contains $next.Stdout 'Summary: Changes text, but its purpose is unclear from the diff.' 'modified file summary describes the observed diff'
+    Check-Contains $next.Stdout "git commit -m 'chore: update repository content' -- 'rename new.txt'" 'renamed file content message uses its current diff'
 
     Set-Content -LiteralPath (Join-Path $work 'responsive-nav.css') -Value '@media (max-width: 600px) { .navigation { display: flex } }'
     $semantic = Invoke-Suggest $work
@@ -284,13 +284,13 @@ try {
 
     $genericPath = Join-Path $work 'generic-message.txt'
     Set-Content -LiteralPath $genericPath -Value 'plain content without a feature signal'
-    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'chore: add generic-message.txt'" 'unclassified text addition uses a chore fallback'
+    Check-Contains (Invoke-Suggest $work).Stdout "git commit -m 'chore: add repository content' -- 'generic-message.txt'" 'unclassified text addition uses a conservative chore fallback'
     Remove-Item -LiteralPath $genericPath
 
     $environmentPath = Join-Path $work '.env.local'
     Set-Content -LiteralPath $environmentPath -Value 'API_KEY=DO_NOT_PRINT_7c1a'
     $environmentSuggestion = Invoke-Suggest $work
-    Check-Contains $environmentSuggestion.Stdout "git commit -m 'chore: add configuration'" 'sensitive filename is sanitized in the subject'
+    Check-Contains $environmentSuggestion.Stdout "git commit -m 'chore: add repository content' -- '.env.local'" 'sensitive filename is omitted from the subject'
     Check (-not $environmentSuggestion.Stdout.Contains('DO_NOT_PRINT_7c1a')) 'secret-like file content is not printed'
     Remove-Item -LiteralPath $environmentPath
 
@@ -354,7 +354,7 @@ try {
     Set-Content -LiteralPath (Join-Path $empty 'first.txt') -Value 'first'
     $emptyResult = Invoke-Suggest $empty
     Check-Equal 0 $emptyResult.ExitCode 'repo with no commits exits 0'
-    Check-Contains $emptyResult.Stdout "git commit -m 'chore: add first.txt' -- 'first.txt'" 'new file in repo with no commits gets a Conventional Commit message'
+    Check-Contains $emptyResult.Stdout "git commit -m 'chore: add repository content' -- 'first.txt'" 'new file in repo with no commits gets a conservative Conventional Commit message'
 }
 catch {
     $script:fail++
