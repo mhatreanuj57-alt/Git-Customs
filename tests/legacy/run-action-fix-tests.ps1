@@ -49,6 +49,10 @@ function New-Job {
         name = $Name
         status = 'completed'
         conclusion = $Conclusion
+        steps = @(
+            [ordered]@{ number = 1; name = 'Set up job'; status = 'completed'; conclusion = 'success' },
+            [ordered]@{ number = 2; name = 'Run tests'; status = 'completed'; conclusion = $Conclusion }
+        )
     }
 }
 
@@ -206,7 +210,7 @@ function Invoke-CliWithInput {
 }
 
 function New-PythonRun {
-    param([string]$Id, [string]$Head, [string]$Log = "ModuleNotFoundError: No module named 'yaml'")
+    param([string]$Id, [string]$Head, [string]$Log = "File `"src/ci.py`", line 27`nModuleNotFoundError: No module named 'yaml'")
     return New-Run -Id $Id -WorkflowName 'Build Check' -WorkflowPath '.github/workflows/ci.yml' -WorkflowId '102' `
         -Branch 'main' -Status 'completed' -Conclusion 'failure' -CreatedAt '2026-10-27T10:00:00Z' `
         -Title 'Python failure' -HeadSha $Head -FailedLog $Log -Jobs @((New-Job '9201' 'test' 'failure'))
@@ -279,7 +283,7 @@ try {
     Set-Scenario @($run)
     $beforeRequirements = [System.IO.File]::ReadAllText($requirementsPath)
     $dryRun = Invoke-Cli @('--run', '8101', '--dry-run')
-    Assert-True ($dryRun.ExitCode -eq 0 -and $dryRun.Text -match 'Missing Python dependency' -and $dryRun.Text -match '\+ PyYAML' -and $dryRun.Text -match 'Dry run' -and [System.IO.File]::ReadAllText($requirementsPath) -eq $beforeRequirements) 'action-fix dry run proposes a Python dependency without editing'
+    Assert-True ($dryRun.ExitCode -eq 0 -and $dryRun.Text -match 'Missing Python dependency' -and $dryRun.Text -match '\+ PyYAML' -and $dryRun.Text -match 'Failed step: test / Run tests' -and $dryRun.Text -match 'Source location: src/ci.py:27' -and $dryRun.Text -match 'Dry run' -and [System.IO.File]::ReadAllText($requirementsPath) -eq $beforeRequirements) 'action-fix reports failed steps and log source locations without editing'
 
     $declined = Invoke-CliWithInput 'n' @('--run', '8101')
     Assert-True ($declined.ExitCode -eq 1 -and $declined.Text -match 'fix cancelled' -and [System.IO.File]::ReadAllText($requirementsPath) -eq $beforeRequirements) 'action-fix cancels the first approval without editing'
@@ -344,6 +348,21 @@ try {
     Set-Scenario @($authRun)
     $auth = Invoke-Cli @('--run', '8108')
     Assert-True ($auth.ExitCode -eq 1 -and $auth.Text -match 'Authentication or secret configuration failure' -and $auth.Text -match 'No automatic change or retry' -and @((Get-FakeState).rerunCalls).Count -eq 0) 'action-fix does not retry authentication failures'
+
+    $permissionRun = New-PythonRun '8117' $baseHead 'Error: Resource not accessible by integration'
+    Set-Scenario @($permissionRun)
+    $permission = Invoke-Cli @('--run', '8117', '--dry-run')
+    Assert-True ($permission.ExitCode -eq 0 -and $permission.Text -match 'Workflow or repository permission failure' -and $permission.Text -match 'job-level permissions' -and @((Get-FakeState).rerunCalls).Count -eq 0) 'action-fix explains permission failures without retrying'
+
+    $dependencyRun = New-PythonRun '8119' $baseHead "Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'left-pad'"
+    Set-Scenario @($dependencyRun)
+    $dependency = Invoke-Cli @('--run', '8119', '--dry-run')
+    Assert-True ($dependency.ExitCode -eq 0 -and $dependency.Text -match 'Dependency installation or resolution failure' -and $dependency.Text -match 'manifest and lockfile together' -and @((Get-FakeState).rerunCalls).Count -eq 0) 'action-fix explains JavaScript dependency resolution failures'
+
+    $yamlRun = New-PythonRun '8118' $baseHead 'Invalid workflow file .github/workflows/ci.yml:17:4: mapping values are not allowed here'
+    Set-Scenario @($yamlRun)
+    $yaml = Invoke-Cli @('--run', '8118', '--dry-run')
+    Assert-True ($yaml.ExitCode -eq 0 -and $yaml.Text -match 'YAML or workflow configuration error' -and $yaml.Text -match 'Source location: .github/workflows/ci.yml:17' -and $yaml.Text -match 'indentation|quoting' -and @((Get-FakeState).rerunCalls).Count -eq 0) 'action-fix identifies YAML failures and their line without retrying'
 
     $transientRun = New-PythonRun '8109' $baseHead 'fatal: unable to access https://github.com/example/demo.git/: Could not resolve host: github.com'
     $rerunTransitions = [ordered]@{
