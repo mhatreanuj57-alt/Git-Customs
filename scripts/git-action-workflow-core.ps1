@@ -265,6 +265,9 @@ function Assert-ActionWorkflowGhAuthenticated {
 
     $account = $active[0]
     if ([string]$account.state -ne 'success') {
+        if (-not [string]::IsNullOrWhiteSpace([string]$account.error)) {
+            throw "could not verify the active gh account '$($account.login)' for '$HostName'.`n$($account.error)"
+        }
         throw "the active gh account '$($account.login)' for '$HostName' is not authenticated."
     }
 
@@ -480,7 +483,7 @@ function Get-ActionWorkflowRuns {
         'run', 'list',
         '--repo', $Context.RepoSpec,
         '--limit', [string]$Limit,
-        '--json', 'attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,status,url,workflowDatabaseId,workflowName'
+        '--json', 'attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,startedAt,status,updatedAt,url,workflowDatabaseId,workflowName'
     )
 
     if ($null -ne $Workflow) {
@@ -508,7 +511,7 @@ function Get-ActionWorkflowRun {
     $result = Invoke-ActionWorkflowGh @(
         'run', 'view', $RunId,
         '--repo', $Context.RepoSpec,
-        '--json', 'attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,status,url,workflowDatabaseId,workflowName'
+        '--json', 'attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,headSha,startedAt,status,updatedAt,url,workflowDatabaseId,workflowName'
     )
     if ($result.ExitCode -ne 0) {
         throw "workflow run '$RunId' was not found or is not accessible for '$($Context.FullName)'.`n$(Format-ActionWorkflowFailure $result)"
@@ -723,11 +726,17 @@ function Write-ActionWorkflowRunDetails {
     Write-Output "Branch:      $($Run.headBranch)"
     Write-Output "Status:      $(Format-ActionWorkflowStatusLabel $Run)"
     Write-Output "Event:       $($Run.event)"
+    if (-not [string]::IsNullOrWhiteSpace([string]$Run.headSha)) {
+        Write-Output "Commit:      $(([string]$Run.headSha).Substring(0, [Math]::Min(7, ([string]$Run.headSha).Length)))"
+    }
     if (-not [string]::IsNullOrWhiteSpace([string]$Run.displayTitle)) {
         Write-Output "Title:       $($Run.displayTitle)"
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$Run.createdAt)) {
         Write-Output "Created:     $($Run.createdAt)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Run.startedAt)) {
+        Write-Output "Duration:    $(Format-ActionWorkflowDuration $Run)"
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$Run.url)) {
         Write-Output "URL:         $($Run.url)"

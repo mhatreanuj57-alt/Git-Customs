@@ -14,6 +14,7 @@ function Show-ActionWorkflowUsage {
     Write-Output 'Manage GitHub Actions workflows for the current repository.'
     Write-Output ''
     Write-Output 'Commands:'
+    Write-Output '  overview  List workflows, triggers, and each workflow''s latest run'
     Write-Output '  init      Create a starter workflow without overwriting existing files'
     Write-Output '  validate  Validate local workflows and GitHub access'
     Write-Output '  status    Show recent workflow runs'
@@ -22,6 +23,41 @@ function Show-ActionWorkflowUsage {
     Write-Output '  retry     Re-run a completed workflow run after confirmation'
     Write-Output ''
     Write-Output "Run '$($script:CommandPrefix) <command> -h' for command options."
+}
+
+function Get-ActionWorkflowTriggers {
+    param($Workflow)
+    $matches = [regex]::Matches([string]$Workflow.Content, '(?m)^[ \t]{0,2}(?:on|"on"|''on'')[ \t]*:[ \t]*(?<value>.*)$')
+    if ($matches.Count -eq 0) { return 'unknown' }
+    $value = $matches[0].Groups['value'].Value.Trim()
+    if ($value -match '^\[(?<items>[^\]]+)\]') { return (($Matches['items'] -split ',\s*') -join ', ') }
+    $lines = @($Workflow.Content -split "\r?\n")
+    $inside = $false
+    $triggers = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($line in $lines) {
+        if (-not $inside) { if ($line -match '^\s{0,2}(?:on|"on"|''on'')\s*:') { $inside = $true }; continue }
+        if ($line -match '^\S') { break }
+        if ($line -match '^\s{2,}(?<trigger>[A-Za-z_][A-Za-z0-9_-]*)\s*:') { $triggers.Add($Matches['trigger']) }
+    }
+    if ($triggers.Count -gt 0) { return ($triggers.ToArray() -join ', ') }
+    if ($value) { return $value }
+    return 'unknown'
+}
+
+function Format-ActionWorkflowDuration {
+    param($Run)
+    $start = [datetimeoffset]::MinValue
+    if (-not [datetimeoffset]::TryParse([string]$Run.startedAt, [ref]$start)) { return '-' }
+    $end = [datetimeoffset]::UtcNow
+    $completedAt = [datetimeoffset]::MinValue
+    if ([string]$Run.status -eq 'completed') {
+        if (-not [datetimeoffset]::TryParse([string]$Run.updatedAt, [ref]$completedAt)) { return '-' }
+        $end = $completedAt
+    }
+    $seconds = [Math]::Max(0, [Math]::Round(($end - $start).TotalSeconds))
+    if ($seconds -ge 3600) { return ('{0}h {1}m' -f [int]($seconds / 3600), [int](($seconds % 3600) / 60)) }
+    if ($seconds -ge 60) { return ('{0}m {1}s' -f [int]($seconds / 60), [int]($seconds % 60)) }
+    return "${seconds}s"
 }
 
 function Show-ActionWorkflowInitHelp {
@@ -58,6 +94,12 @@ function Show-ActionWorkflowStatusHelp {
     Write-Output '  --branch <name>        Filter by branch (default: current branch)'
     Write-Output '  --all-branches         Include runs from every branch'
     Write-Output '  --limit <count>        Number of runs to show (1-100, default: 10)'
+}
+
+function Show-ActionWorkflowOverviewHelp {
+    Write-Output 'Usage: git action-workflow overview'
+    Write-Output ''
+    Write-Output 'Discovers repository workflows and shows triggers plus the latest run, branch, commit, and duration.'
 }
 
 function Show-ActionWorkflowWatchHelp {
@@ -229,6 +271,7 @@ function Invoke-ActionWorkflowInit {
     Write-Output "Repository: $($context.FullName) | branch: $($context.Branch)"
     Write-Output "Created: $relativePath"
     Write-Output "Workflow: $workflowName"
+    Write-Output 'Triggers: push, workflow_dispatch'
     Write-Output 'No files were staged, committed, or pushed.'
     Write-Output ''
     Write-Output 'Next:'
@@ -286,6 +329,7 @@ function Invoke-ActionWorkflowValidate {
         throw 'no workflow files were found in .github/workflows; run git action-workflow init first.'
     }
 
+    Write-Output 'Loading workflow registration from GitHub...'
     $remoteWorkflows = @(Get-ActionWorkflowList $context)
     $selector = [string]$options.workflow
     $selectedLocal = @($localWorkflows)
@@ -361,7 +405,7 @@ function Invoke-ActionWorkflowValidate {
         if ([string]$remote.name -ine $local.Name) {
             $warnings.Add("$($local.Path) has local name '$($local.Name)' but remote name '$($remote.name)'.")
         }
-        Write-Output "PASS $($local.Path) | $($local.Name) | registered ($stateLabel)"
+        Write-Output "PASS $($local.Path) | $($local.Name) | triggers: $(Get-ActionWorkflowTriggers $local) | registered ($stateLabel)"
     }
 
     foreach ($name in @($nameCounts.Keys)) {
@@ -431,6 +475,7 @@ function Invoke-ActionWorkflowStatus {
         $workflow = Resolve-ActionWorkflow $context ([string]$options.workflow)
     }
 
+    Write-Output 'Loading workflow runs from GitHub...'
     $runs = @(Get-ActionWorkflowRuns -Context $context -Workflow $workflow -Branch $branch `
         -AllBranches:([bool]$options.allBranches) -Limit $limit |
         Sort-Object -Property createdAt -Descending)
@@ -458,6 +503,8 @@ function Invoke-ActionWorkflowStatus {
         (Format-ActionWorkflowColumn 'BRANCH' 16),
         (Format-ActionWorkflowColumn 'STATUS' 18),
         (Format-ActionWorkflowColumn 'CREATED' 16),
+        (Format-ActionWorkflowColumn 'COMMIT' 10),
+        (Format-ActionWorkflowColumn 'DURATION' 10),
         (Format-ActionWorkflowColumn 'TITLE' 30)
     ) -join ' ')
     Write-Output ''
@@ -471,9 +518,44 @@ function Invoke-ActionWorkflowStatus {
             (Format-ActionWorkflowColumn ([string]$run.headBranch) 16),
             (Format-ActionWorkflowColumn (Format-ActionWorkflowStatusLabel $run) 18),
             (Format-ActionWorkflowColumn (Format-ActionWorkflowTimestamp ([string]$run.createdAt)) 16),
+            (Format-ActionWorkflowColumn ($(if ([string]$run.headSha.Length -gt 7) { [string]$run.headSha.Substring(0, 7) } else { [string]$run.headSha })) 10),
+            (Format-ActionWorkflowColumn (Format-ActionWorkflowDuration $run) 10),
             (Format-ActionWorkflowColumn ([string]$run.displayTitle) 30)
         ) -join ' ')
         Write-Output $line
+    }
+}
+
+function Invoke-ActionWorkflowOverview {
+    param([string[]]$Arguments)
+    if ($Arguments -contains '-h' -or $Arguments -contains '--help') { Show-ActionWorkflowOverviewHelp; return }
+    if ($Arguments.Count -gt 0) { throw "unexpected argument '$($Arguments[0])'." }
+    $context = Get-ActionWorkflowContext
+    Write-Output "Repository: $($context.FullName) | branch: $($context.Branch) | gh: $($context.GhLogin)"
+    Write-Output 'Loading workflow definitions and the latest GitHub run data...'
+    $local = @(Get-ActionWorkflowLocalWorkflowFiles $context)
+    $remote = @(Get-ActionWorkflowList $context)
+    $localByPath = @{}
+    foreach ($workflow in $local) { $localByPath[([string]$workflow.Path).ToLowerInvariant()] = $workflow }
+    $latestByWorkflow = @{}
+    foreach ($workflow in $remote) {
+        $latestRun = @(Get-ActionWorkflowRuns -Context $context -Workflow $workflow -AllBranches -Limit 1)
+        if ($latestRun.Count -gt 0) { $latestByWorkflow[[string]$workflow.id] = $latestRun[0] }
+    }
+    if ($remote.Count -eq 0 -and $local.Count -eq 0) { Write-Output 'No local or registered workflows found.'; return }
+    $header = (@((Format-ActionWorkflowColumn 'WORKFLOW' 24),(Format-ActionWorkflowColumn 'TRIGGERS' 24),(Format-ActionWorkflowColumn 'LATEST STATUS' 20),(Format-ActionWorkflowColumn 'BRANCH' 18),(Format-ActionWorkflowColumn 'COMMIT' 10),(Format-ActionWorkflowColumn 'DURATION' 10)) -join ' ')
+    Write-Output ''; Write-Output $header; Write-Output ('-' * $header.Length)
+    foreach ($workflow in $remote) {
+        $path = ([string]$workflow.path).ToLowerInvariant()
+        $localWorkflow = if ($localByPath.ContainsKey($path)) { $localByPath[$path] } else { $null }
+        $trigger = if ($null -ne $localWorkflow) { Get-ActionWorkflowTriggers $localWorkflow } else { 'unknown (no local file)' }
+        $key = [string]$workflow.id
+        $run = if ($latestByWorkflow.ContainsKey($key)) { $latestByWorkflow[$key] } else { $null }
+        $line = @((Format-ActionWorkflowColumn ([string]$workflow.name) 24),(Format-ActionWorkflowColumn $trigger 24),(Format-ActionWorkflowColumn $(if ($null -eq $run) { 'no runs' } else { Format-ActionWorkflowStatusLabel $run }) 20),(Format-ActionWorkflowColumn $(if ($null -eq $run) { '-' } else { [string]$run.headBranch }) 18),(Format-ActionWorkflowColumn $(if ($null -eq $run) { '-' } else { [string]$run.headSha.Substring(0, [Math]::Min(7, [string]$run.headSha.Length)) }) 10),(Format-ActionWorkflowColumn $(if ($null -eq $run) { '-' } else { Format-ActionWorkflowDuration $run }) 10)) -join ' '
+        Write-Output $line
+    }
+    foreach ($workflow in $local | Where-Object { $remote.path -notcontains $_.Path }) {
+        Write-Output ((Format-ActionWorkflowColumn $workflow.Name 24) + ' ' + (Format-ActionWorkflowColumn (Get-ActionWorkflowTriggers $workflow) 24) + ' ' + (Format-ActionWorkflowColumn 'local only' 20) + ' ' + (Format-ActionWorkflowColumn '-' 18) + ' ' + (Format-ActionWorkflowColumn '-' 10) + ' ' + (Format-ActionWorkflowColumn '-' 10))
     }
 }
 
@@ -551,6 +633,7 @@ function Invoke-ActionWorkflowWatch {
     }
 
     Write-Output "Watching run $($run.databaseId) every $interval second(s), timeout $timeout second(s)."
+    Write-Output 'Loading live run state from GitHub on each poll.'
     $deadline = [DateTime]::UtcNow.AddSeconds($timeout)
     $lastLabel = $label
 
@@ -561,6 +644,7 @@ function Invoke-ActionWorkflowWatch {
         }
 
         $sleepSeconds = [Math]::Min($interval, [Math]::Max(1, [Math]::Ceiling($remaining)))
+        Write-Output "Loading latest run status... ($([int]$sleepSeconds)s)"
         Start-Sleep -Seconds ([int]$sleepSeconds)
 
         $run = Get-ActionWorkflowRun $context ([string]$run.databaseId)
@@ -580,6 +664,18 @@ function Invoke-ActionWorkflowWatch {
             throw "timed out after $timeout second(s) waiting for run $($run.databaseId) to finish. Run URL: $($run.url)"
         }
     }
+}
+
+function Get-ActionWorkflowLikelyCause {
+    param([string]$LogText)
+    if ($LogText -match '(?i)npm ci.*(package-lock|lockfile)|package\.json.*package-lock') { return 'Lockfile mismatch or missing npm lockfile.' }
+    if ($LogText -match '(?i)module not found|cannot find module|no module named') { return 'A required dependency or module could not be found.' }
+    if ($LogText -match '(?i)permission denied|EACCES|access is denied') { return 'The step encountered a file or process permission error.' }
+    if ($LogText -match '(?i)timed out|timeout') { return 'The step exceeded a time limit or waited on an unresponsive operation.' }
+    if ($LogText -match '(?i)authentication failed|unauthorized|permission to .* denied|resource not accessible by integration') { return 'The step may lack valid credentials or required token permissions.' }
+    if ($LogText -match '(?i)assertion|test failed|tests? failed|failure:') { return 'The step reports a failing test or assertion; inspect the first failure above.' }
+    if ($LogText -match '(?i)syntaxerror|syntax error|parse error') { return 'The step reports a syntax or parsing error.' }
+    return $null
 }
 
 function Invoke-ActionWorkflowLogs {
@@ -605,6 +701,8 @@ function Invoke-ActionWorkflowLogs {
     $context = Get-ActionWorkflowContext
     $selection = Resolve-ActionWorkflowSelectedRun -Context $context -Options $options
     $run = $selection.Run
+    Write-Output 'Loading job and step details from GitHub...'
+    $jobs = @(Get-ActionWorkflowJobs $context $run)
 
     $job = $null
     if (-not [string]::IsNullOrWhiteSpace([string]$options.job)) {
@@ -612,7 +710,7 @@ function Invoke-ActionWorkflowLogs {
     }
 
     if ($options.failed) {
-        $failedJobs = @(Get-ActionWorkflowFailedJobs -Context $context -Run $run)
+        $failedJobs = @($jobs | Where-Object { [string]$_.conclusion -in @('failure', 'timed_out', 'action_required', 'startup_failure', 'cancelled') })
         if ($null -ne $job) {
             $selectedFailed = @($failedJobs | Where-Object { [string]$_.databaseId -eq [string]$job.databaseId })
             if ($selectedFailed.Count -eq 0) {
@@ -645,11 +743,29 @@ function Invoke-ActionWorkflowLogs {
     Write-Output "Workflow:   $($run.workflowName)"
     Write-Output "Branch:     $($run.headBranch)"
     Write-Output "Status:     $(Format-ActionWorkflowStatusLabel $run)"
+    Write-Output "Commit:     $(([string]$run.headSha).Substring(0, [Math]::Min(7, ([string]$run.headSha).Length)))"
+    Write-Output "Duration:   $(Format-ActionWorkflowDuration $run)"
     if ($null -ne $job) {
         Write-Output "Job:        $($job.databaseId) ($($job.name))"
     }
     $modeLabel = if ($options.failed) { 'failed steps' } else { 'full logs' }
     Write-Output "Logs:       $modeLabel"
+    if ($jobs.Count -gt 0) {
+        Write-Output ''
+        Write-Output 'Jobs and steps:'
+        foreach ($item in $jobs) {
+            Write-Output ("  {0} | {1} | {2}" -f $item.name, $item.conclusion, $item.status)
+            foreach ($step in @($item.steps)) {
+                if ($null -eq $step) { continue }
+                Write-Output ("    {0}. {1} | {2}" -f $step.number, $step.name, $(if ([string]$step.conclusion) { $step.conclusion } else { $step.status }))
+            }
+        }
+        $failedSteps = @($jobs | ForEach-Object { @($_.steps | Where-Object { [string]$_.conclusion -in @('failure', 'timed_out', 'action_required') }) })
+        if ($failedSteps.Count -gt 0) {
+            Write-Output 'Failed steps:'
+            foreach ($step in $failedSteps) { Write-Output ("  - {0}" -f $step.name) }
+        }
+    }
     Write-Output ''
 
     $lines = @($result.Output | ForEach-Object { [string]$_ })
@@ -659,6 +775,11 @@ function Invoke-ActionWorkflowLogs {
     }
     foreach ($line in $lines) {
         Write-Output $line
+    }
+    if ($options.failed -and $lines.Count -gt 0) {
+        $cause = Get-ActionWorkflowLikelyCause ($lines -join "`n")
+        if ($null -ne $cause) { Write-Output ("`nLikely cause from log text: {0}" -f $cause) }
+        else { Write-Output '`nLikely cause: not identifiable from the returned log text; inspect the failed step output above.' }
     }
 }
 
@@ -697,6 +818,7 @@ function Invoke-ActionWorkflowRetry {
 
     $failedJobs = @()
     if (-not $options.all) {
+        Write-Output 'Loading failed job details from GitHub...'
         $failedJobs = @(Get-ActionWorkflowFailedJobs -Context $context -Run $run)
         if ($failedJobs.Count -eq 0) {
             throw "workflow run '$($run.databaseId)' has no failed jobs to re-run. Use --all to re-run every job."
@@ -728,6 +850,7 @@ function Invoke-ActionWorkflowRetry {
         }
     }
 
+    Write-Output 'Submitting rerun request to GitHub...'
     $rerunArguments = @('run', 'rerun', [string]$run.databaseId, '--repo', $context.RepoSpec)
     if (-not $options.all) {
         $rerunArguments += '--failed'
@@ -777,6 +900,10 @@ try {
         }
         '^init$' {
             Invoke-ActionWorkflowInit $commandArguments
+            exit [int]$script:ExitCode
+        }
+        '^overview$' {
+            Invoke-ActionWorkflowOverview $commandArguments
             exit [int]$script:ExitCode
         }
         '^validate$' {
