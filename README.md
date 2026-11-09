@@ -123,6 +123,7 @@ well. The npm package does not modify those directories.
 Manages GitHub Actions workflows for the current repository.
 
 ```powershell
+git action-workflow overview
 git action-workflow init
 git action-workflow validate
 git action-workflow status
@@ -133,17 +134,21 @@ git action-workflow retry --yes
 
 Subcommands:
 
+- `overview`: discovers local and GitHub-registered workflows and shows configured
+  triggers plus the latest run status, branch, commit, and elapsed execution time.
 - `init`: creates `.github/workflows/action-workflow.yml` or a named workflow without
-  overwriting an existing file. Use `--name`, `--file`, or `--dry-run`. It does not
-  stage, commit, or push.
+  overwriting an existing file. It reports the starter triggers. Use `--name`, `--file`,
+  or `--dry-run`. It does not stage, commit, or push.
 - `validate`: checks local workflow structure and, optionally, GitHub registration.
   Use `--workflow <selector>` and `--require-remote`.
-- `status`: shows recent runs. Use `--workflow`, `--branch`, `--all-branches`, and
-  `--limit`.
+- `status`: shows recent runs with status, commit, and elapsed duration. Use
+  `--workflow`, `--branch`, `--all-branches`, and `--limit`.
 - `watch`: polls a verified run until it finishes. Use `--run`, `--workflow`,
   `--branch`, `--all-branches`, `--interval`, and `--timeout`.
-- `logs`: prints verified run or job logs. Use `--run`, `--workflow`, `--branch`,
-  `--all-branches`, `--failed`, and `--job`.
+- `logs`: prints verified run/job logs with job and step conclusions; `--failed`
+  highlights failed steps and reports a likely cause only when the returned log text
+  supports one. Use `--run`, `--workflow`, `--branch`, `--all-branches`, `--failed`,
+  and `--job`.
 - `retry`: re-runs a completed unsuccessful run after confirmation. Use `--run`,
   `--workflow`, `--branch`, `--all-branches`, `--all`, and `--yes`.
 
