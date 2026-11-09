@@ -43,6 +43,10 @@ function New-Job {
         name = $Name
         status = 'completed'
         conclusion = $Conclusion
+        steps = @(
+            [ordered]@{ number = 1; name = 'Install dependencies'; status = 'completed'; conclusion = $(if ($Conclusion -eq 'failure') { 'failure' } else { 'success' }) },
+            [ordered]@{ number = 2; name = 'Run tests'; status = 'completed'; conclusion = $(if ($Conclusion -eq 'failure') { 'skipped' } else { 'success' }) }
+        )
         log = $Log
         failedLog = $FailedLog
     }
@@ -129,9 +133,9 @@ try {
             (New-Job '501' 'build' 'success' 'job 501 full log' '')
         ) 'run 4001 full log' ''),
         (New-Run '4002' 'Build Check' '.github/workflows/ci.yml' '102' 'feature' 'completed' 'failure' '2026-10-27T11:00:00Z' 'Feature failure' @(
-            (New-Job '502' 'test' 'failure' 'job 502 full log' 'job 502 failed step log'),
+            (New-Job '502' 'test' 'failure' 'job 502 full log' 'Error: Cannot find module "missing-package"'),
             (New-Job '503' 'deploy' 'success' 'job 503 full log' '')
-        ) 'run 4002 full log' 'run 4002 failed step log')
+        ) 'run 4002 full log' 'run 4002 failed step log: Cannot find module "missing-package"')
     )
     Set-FakeState @{ workflows = $workflows; runs = $runs; failures = @{}; rerunCalls = @() }
 
@@ -148,10 +152,10 @@ try {
     Assert-True ($latestJob.ExitCode -eq 0 -and $latestJob.Text -match 'Run:\s+4001' -and $latestJob.Text -match 'job 501 full log') 'logs resolves a job on the latest matching run'
 
     $failedLogs = Invoke-Cli @('logs', '--run', '4002', '--failed')
-    Assert-True ($failedLogs.ExitCode -eq 0 -and $failedLogs.Text -match 'Logs:\s+failed steps' -and $failedLogs.Text -match 'run 4002 failed step log') 'logs --failed shows failed run steps'
+    Assert-True ($failedLogs.ExitCode -eq 0 -and $failedLogs.Text -match 'Logs:\s+failed steps' -and $failedLogs.Text -match 'run 4002 failed step log' -and $failedLogs.Text -match 'Install dependencies' -and $failedLogs.Text -match 'Failed steps:' -and $failedLogs.Text -match 'required dependency or module') 'logs --failed shows job steps and a log-supported likely cause'
 
     $failedJob = Invoke-Cli @('logs', '--run', '4002', '--failed', '--job', '502')
-    Assert-True ($failedJob.ExitCode -eq 0 -and $failedJob.Text -match 'job 502 failed step log' -and $failedJob.Text -notmatch 'job 503') 'logs --failed narrows to a verified failed job'
+    Assert-True ($failedJob.ExitCode -eq 0 -and $failedJob.Text -match 'Cannot find module' -and $failedJob.Text -notmatch 'job 503') 'logs --failed narrows to a verified failed job'
 
     $successfulFailed = Invoke-Cli @('logs', '--run', '4001', '--failed')
     Assert-True ($successfulFailed.ExitCode -eq 1 -and $successfulFailed.Text -match 'has no failed jobs') 'logs --failed rejects a run without failed jobs'

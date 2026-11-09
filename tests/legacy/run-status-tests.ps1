@@ -57,6 +57,8 @@ function New-Run {
         status = $Status
         conclusion = $Conclusion
         createdAt = $CreatedAt
+        startedAt = $CreatedAt
+        updatedAt = ([datetimeoffset]::Parse($CreatedAt).AddMinutes(3).ToString('yyyy-MM-ddTHH:mm:ssZ'))
         displayTitle = $Title
         event = 'push'
         attempt = 1
@@ -99,6 +101,9 @@ try {
     git -C $repoPath add README.md
     git -C $repoPath commit -m 'Initial commit' | Out-Null
     git -C $repoPath remote add origin 'https://github.com/example/demo.git'
+    New-Item -ItemType Directory -Path (Join-Path $repoPath '.github\workflows') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $repoPath '.github\workflows\action-workflow.yml') -Value "name: Action Workflow`non:`n  push:`n  workflow_dispatch:`njobs:`n  test:`n    runs-on: ubuntu-latest" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $repoPath '.github\workflows\ci.yml') -Value "name: Build Check`non: [push, pull_request]`njobs:`n  test:`n    runs-on: ubuntu-latest" -Encoding ASCII
     $env:FAKE_GH_STATE = $statePath
     $env:FAKE_GH_LOG = $logPath
 
@@ -115,6 +120,10 @@ try {
 
     $empty = Invoke-Cli @('status')
     Assert-True ($empty.ExitCode -eq 0 -and $empty.Text -match 'No workflow runs found') 'status handles no runs'
+    $overviewHelp = Invoke-Cli @('overview', '--help')
+    Assert-True ($overviewHelp.ExitCode -eq 0 -and $overviewHelp.Text -match 'latest run') 'overview help is available'
+    $overviewBadArgument = Invoke-Cli @('overview', '--unknown')
+    Assert-True ($overviewBadArgument.ExitCode -eq 1 -and $overviewBadArgument.Text -match 'unexpected argument') 'overview rejects unknown arguments'
 
     Set-FakeState @{
         workflows = $workflows
@@ -128,7 +137,10 @@ try {
     }
 
     $current = Invoke-Cli @('status')
-    Assert-True ($current.ExitCode -eq 0 -and $current.Text -match 'Repository: example/demo' -and $current.Text -match 'Branch: main' -and $current.Text -match '2001' -and $current.Text -notmatch '2002' -and $current.Text -match 'completed/success' -and $current.Text -match 'in_progress') 'status defaults to current branch and prints run columns'
+    Assert-True ($current.ExitCode -eq 0 -and $current.Text -match 'Repository: example/demo' -and $current.Text -match 'Branch: main' -and $current.Text -match '2001' -and $current.Text -notmatch '2002' -and $current.Text -match 'completed/success' -and $current.Text -match 'in_progress' -and $current.Text -match 'COMMIT' -and $current.Text -match 'DURATION' -and $current.Text -match 'abc123' -and $current.Text -match '3m 0s') 'status defaults to current branch and shows commit and duration columns'
+
+    $overview = Invoke-Cli @('overview')
+    Assert-True ($overview.ExitCode -eq 0 -and $overview.Text -match 'Action Workflow' -and $overview.Text -match 'push, workflow_dispatch' -and $overview.Text -match 'Build Check' -and $overview.Text -match 'pull_request' -and $overview.Text -match 'in_progress' -and $overview.Text -match 'abc123' -and $overview.Text -match '3m 0s') 'overview discovers triggers and latest run details'
 
     $all = Invoke-Cli @('status', '--all-branches')
     Assert-True ($all.ExitCode -eq 0 -and $all.Text -match 'all branches' -and $all.Text -match '2001' -and $all.Text -match '2002' -and $all.Text -match '2003') 'status --all-branches includes every branch'

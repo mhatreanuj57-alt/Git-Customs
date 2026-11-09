@@ -257,6 +257,14 @@ try {
     Assert-Throws { Assert-ActionWorkflowGhAuthenticated 'github.com' } 'rejects gh without an active account' 'no active authenticated'
 
     $authState.auth.hosts.'github.com'[0].active = $true
+    $authState.auth.hosts.'github.com'[0].state = 'error'
+    $authState.auth.hosts.'github.com'[0] | Add-Member -NotePropertyName error -NotePropertyValue 'network unavailable' -Force
+    [System.IO.File]::WriteAllText($statePath, ($authState | ConvertTo-Json -Depth 30), (New-Object System.Text.UTF8Encoding $false))
+    $script:ActionWorkflowAuthCache = @{}
+    Assert-Throws { Assert-ActionWorkflowGhAuthenticated 'github.com' } 'explains GitHub API connectivity failures' 'network unavailable'
+    $authState.auth.hosts.'github.com'[0].state = 'success'
+    $authState.auth.hosts.'github.com'[0].PSObject.Properties.Remove('error')
+
     $authState.failures = [pscustomobject]@{ 'workflow list' = 'workflow API failed' }
     [System.IO.File]::WriteAllText($statePath, ($authState | ConvertTo-Json -Depth 30), (New-Object System.Text.UTF8Encoding $false))
     Assert-Throws { Get-ActionWorkflowList $context } 'surfaces gh workflow discovery failure' 'workflow API failed'

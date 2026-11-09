@@ -124,7 +124,7 @@ try {
 
     $init = Invoke-Cli @('init')
     $workflowPath = Join-Path $repoPath '.github\workflows\action-workflow.yml'
-    Assert-True ($init.ExitCode -eq 0 -and (Test-Path -LiteralPath $workflowPath) -and $init.Text -match 'Created: .github/workflows/action-workflow.yml') 'end-to-end init creates the starter workflow'
+    Assert-True ($init.ExitCode -eq 0 -and (Test-Path -LiteralPath $workflowPath) -and $init.Text -match 'Created: .github/workflows/action-workflow.yml' -and $init.Text -match 'Triggers: push, workflow_dispatch') 'end-to-end init creates the starter workflow and reports its triggers'
 
     $localOnly = Invoke-Cli @('validate')
     Assert-True ($localOnly.ExitCode -eq 0 -and $localOnly.Text -match 'local only' -and $localOnly.Text -match 'not registered on GitHub yet') 'end-to-end validate reports an unregistered local workflow'
@@ -145,7 +145,7 @@ try {
     Set-FakeState @{ workflows = $workflows; runs = $runs; failures = @{}; rerunCalls = @() }
 
     $strict = Invoke-Cli @('validate', '--workflow', 'action-workflow.yml', '--require-remote')
-    Assert-True ($strict.ExitCode -eq 0 -and $strict.Text -match 'registered \(active\)' -and $strict.Text -match 'no warnings') 'end-to-end strict validation accepts a registered workflow'
+    Assert-True ($strict.ExitCode -eq 0 -and $strict.Text -match 'registered \(active\)' -and $strict.Text -match 'triggers: push, workflow_dispatch' -and $strict.Text -match 'no warnings') 'end-to-end strict validation accepts a registered workflow and lists triggers'
 
     $status = Invoke-Cli @('status', '--all-branches')
     Assert-True ($status.ExitCode -eq 0 -and $status.Text -match '7001' -and $status.Text -match '7002' -and $status.Text -match 'completed/success' -and $status.Text -match 'completed/failure') 'end-to-end status lists runs across branches'

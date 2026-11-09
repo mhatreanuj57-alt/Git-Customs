@@ -173,6 +173,16 @@ try {
   assert.match(dispatched.stdout, /Usage: git suggest/);
   pass('installed CLI aliases and run dispatch work');
 
+  const overviewHelp = runCmdFile(
+    path.join(prefix, 'git-customs.cmd'),
+    ['run', 'action-workflow', 'overview', '-h'],
+    env,
+    tempRoot
+  );
+  expectSuccess('installed action-workflow overview help', overviewHelp);
+  assert.match(overviewHelp.stdout, /Usage: git action-workflow overview/);
+  pass('installed action-workflow overview dispatch works');
+
   const repo = path.join(tempRoot, 'repo');
   const origin = path.join(tempRoot, 'origin.git');
   fs.mkdirSync(repo);

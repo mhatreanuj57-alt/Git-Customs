@@ -78,6 +78,11 @@ for (const command of COMMANDS) {
 }
 pass('all command entry points and run dispatch return help');
 
+const workflowOverview = runNode(['bin/git-action-workflow.js', 'overview', '-h']);
+expectSuccess(workflowOverview, 'git action-workflow overview -h');
+assert.match(workflowOverview.stdout, /Usage: git action-workflow overview/);
+pass('action-workflow overview entry point is available');
+
 const convenience = runNode(['bin/cli.js', 'work', '-h']);
 expectSuccess(convenience, 'git-customs work -h');
 assert.match(convenience.stdout, /Usage: git work/);
