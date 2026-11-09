@@ -57,6 +57,12 @@ function Write-ActionFixRunHeader {
     if ($jobCount -gt 0) {
         $jobNames = @($FailedJobs | ForEach-Object { "$($_.name) ($($_.databaseId))" }) -join ', '
         Write-Output "Failed jobs: $jobCount [$jobNames]"
+        foreach ($job in @($FailedJobs)) {
+            $failedSteps = @($job.steps | Where-Object { [string]$_.conclusion -in @('failure', 'timed_out', 'action_required') })
+            foreach ($step in $failedSteps) {
+                Write-Output "  Failed step: $($job.name) / $($step.name) [$($step.conclusion)]"
+            }
+        }
     }
     else {
         Write-Output 'Failed jobs: 0'
@@ -78,6 +84,9 @@ function Write-ActionFixDiagnosis {
             foreach ($line in @($finding.Evidence)) {
                 Write-Output "     - $line"
             }
+        }
+        foreach ($location in @($finding.Locations)) {
+            Write-Output "   Source location: $location"
         }
         if ($null -ne $finding.Proposal) {
             Write-Output "   Affected file: $($finding.File)"

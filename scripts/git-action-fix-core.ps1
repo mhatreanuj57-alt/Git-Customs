@@ -234,6 +234,24 @@ function Get-ActionFixDiagnosticEvidence {
     return [object[]]$evidence.ToArray()
 }
 
+function Get-ActionFixSourceLocations {
+    param([string]$LogText)
+
+    $locations = New-Object 'System.Collections.Generic.List[string]'
+    $patterns = @(
+        '(?i)\bFile\s+["''](?<file>[^"'']+)["''],\s+line\s+(?<line>\d+)',
+        '(?i)(?<file>(?:[A-Za-z]:)?[^\s"'']+\.(?:py|ps1|psm1|js|jsx|ts|tsx|yml|yaml|json|sh|go|java|cs)):(?<line>\d+)(?::\d+)?'
+    )
+    foreach ($pattern in $patterns) {
+        foreach ($match in [regex]::Matches([string]$LogText, $pattern)) {
+            $location = '{0}:{1}' -f $match.Groups['file'].Value, $match.Groups['line'].Value
+            if (-not $locations.Contains($location)) { $locations.Add($location) }
+            if ($locations.Count -ge 5) { return [string[]]$locations.ToArray() }
+        }
+    }
+    return [string[]]$locations.ToArray()
+}
+
 function Assert-ActionFixSafeRelativePath {
     param(
         [Parameter(Mandatory = $true)]$Context,
@@ -835,12 +853,30 @@ function Get-ActionFixDiagnosis {
         return [pscustomobject]@{ Findings = [object[]]$findings.ToArray(); Selected = $findings[0] }
     }
 
+    if ([regex]::IsMatch($text, '(?i)resource not accessible by integration|\bHTTP 403\b|\b403 Forbidden\b|insufficient permissions|permission denied|not permitted to .*token')) {
+        $evidence = Get-ActionFixEvidence -LogText $text -Pattern '(?i)resource not accessible by integration|\bHTTP 403\b|\b403 Forbidden\b|insufficient permissions|permission denied|not permitted to .*token'
+        $findings.Add((New-ActionFixFinding -Id 'permissions' -Title 'Workflow or repository permission failure' `
+            -Confidence 'high' -Action 'Manual' `
+            -Explanation 'GitHub rejected an operation because the workflow token or repository identity lacks access. Check the repository Actions permissions, the job-level permissions block, and whether the operation targets another repository. Grant only the specific required permission; credentials and permission settings are never changed automatically.' `
+            -Evidence $evidence))
+        return [pscustomobject]@{ Findings = [object[]]$findings.ToArray(); Selected = $findings[0] }
+    }
+
     if (Test-ActionFixAnyPattern -Text $text -Patterns $script:ActionFixAuthPatterns) {
         $authEvidence = Get-ActionFixEvidence -LogText $text -Pattern '(?i)(?:bad credentials|authentication failed|permission denied|resource not accessible|not logged in|invalid username|401 Unauthorized|input required|missing secret|no such secret|not found|not set|is required)'
         $findings.Add((New-ActionFixFinding -Id 'authentication' -Title 'Authentication or secret configuration failure' `
             -Confidence 'high' -Action 'Manual' `
             -Explanation 'The run failed while authenticating or resolving a secret. Credentials and secret values are never modified or retried automatically. Check repository permissions, workflow token scopes, and secret names manually.' `
             -Evidence $authEvidence))
+        return [pscustomobject]@{ Findings = [object[]]$findings.ToArray(); Selected = $findings[0] }
+    }
+
+    if ([regex]::IsMatch($text, '(?i)ERR_MODULE_NOT_FOUND|Cannot find module ["''][^"'']+["'']|\bERESOLVE\b|No matching distribution found|Could not find a version that satisfies|Could not resolve dependency')) {
+        $evidence = Get-ActionFixEvidence -LogText $text -Pattern '(?i)ERR_MODULE_NOT_FOUND|Cannot find module|\bERESOLVE\b|No matching distribution found|Could not find a version that satisfies|Could not resolve dependency'
+        $findings.Add((New-ActionFixFinding -Id 'dependency-resolution' -Title 'Dependency installation or resolution failure' `
+            -Confidence 'high' -Action 'Manual' `
+            -Explanation 'The package manager could not find or reconcile a dependency. Check the named package and version in the project manifest and lockfile, confirm the package is available from the configured registry, then update the manifest and lockfile together. No package or lockfile change is applied automatically.' `
+            -Evidence $evidence))
         return [pscustomobject]@{ Findings = [object[]]$findings.ToArray(); Selected = $findings[0] }
     }
 
@@ -958,21 +994,34 @@ function Get-ActionFixDiagnosis {
 
     if ($findings.Count -eq 0) {
         $title = 'Unrecognized CI failure'
+        $explanation = 'No safe automatic fix rule matched this failure. Review the failed job and fix the underlying issue manually; the command will not retry blindly.'
         if ([regex]::IsMatch($text, '(?i)AssertionError|\bFAILED\b|expected .* but')) {
             $title = 'Test or assertion failure'
+            $explanation = 'A test or assertion failed. Use the failing test name and nearby expected/actual values in the evidence to find the regression, then correct the implementation or update the test only if its expectation is obsolete.'
         }
-        elseif ([regex]::IsMatch($text, '(?i)SyntaxError|YAML|configuration|invalid workflow')) {
+        elseif ([regex]::IsMatch($text, '(?i)(?:yaml|workflow file).{0,100}(?:line|column|syntax|parse|invalid)|(?:line|column).{0,80}(?:yaml|workflow)|did not find expected (?:key|document)|mapping values are not allowed')) {
+            $title = 'GitHub Actions YAML or workflow configuration error'
+            $explanation = 'GitHub could not parse or validate the workflow configuration. Check the reported workflow file and line, then correct indentation, quoting, or the invalid key shown in the error.'
+        }
+        elseif ([regex]::IsMatch($text, '(?i)\b(?:build|compile|link)(?:ing)?\b.{0,80}(?:failed|error)|(?:failed|error).{0,80}\b(?:build|compile|link)(?:ing)?\b|exit code [1-9]')) {
+            $title = 'Build or compilation failure'
+            $explanation = 'A build or compilation command exited with an error. Start with the first compiler or bundler error in the evidence; fix that source or build configuration issue before addressing later cascade errors.'
+        }
+        elseif ([regex]::IsMatch($text, '(?i)SyntaxError|configuration error|invalid workflow|invalid configuration')) {
             $title = 'Configuration or syntax failure'
+            $explanation = 'The workflow or project configuration could not be parsed. Use the reported file and line, if available, to correct the syntax or invalid setting.'
         }
         elseif ([string]::IsNullOrWhiteSpace($text)) {
             $title = 'No actionable logs were available'
-        }
-        $explanation = 'No safe automatic fix rule matched this failure. Review the failed job and fix the underlying issue manually; the command will not retry blindly.'
-        if ([string]::IsNullOrWhiteSpace($text)) {
-            $explanation = 'GitHub did not return usable failure logs. Review the run and failed jobs manually; the command will not edit files or retry blindly.'
+            $explanation = 'GitHub did not return usable failure logs. Review the failed job and steps manually; the command will not edit files or retry blindly.'
         }
         $findings.Add((New-ActionFixFinding -Id 'manual' -Title $title -Confidence 'low' -Action 'Manual' `
             -Explanation $explanation -Evidence (Get-ActionFixDiagnosticEvidence $text)))
+    }
+
+    $locations = @(Get-ActionFixSourceLocations $text)
+    foreach ($finding in $findings) {
+        $finding | Add-Member -NotePropertyName Locations -NotePropertyValue $locations -Force
     }
 
     $selected = $findings | Where-Object { $_.Action -ceq 'Edit' } | Select-Object -First 1

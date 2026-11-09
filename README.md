@@ -158,8 +158,9 @@ a workflow id. Ambiguous selectors fail instead of choosing arbitrarily.
 ## git action-fix
 
 Diagnoses a failed GitHub Actions run, proposes one narrow remediation, and requires
-approval before editing. With no options it selects the latest failed run on the
-current branch.
+approval before editing. It lists the failed jobs and steps, retrieves failed-step
+logs, explains likely causes, and shows file/line locations found in the logs. With
+no options it selects the latest failed run on the current branch.
 
 ```powershell
 git action-fix
@@ -168,10 +169,14 @@ git action-fix --workflow ci.yml
 git action-fix --branch main --interval 5 --timeout 300
 ```
 
-Supported automatic fixes are intentionally limited to proven cases such as a
-missing trusted Python package, a Node.js major version requirement, or an `npm ci`
-command without a lockfile. Authentication failures, missing secrets, leaked
-credentials, and unrecognized failures are never edited or retried automatically.
+Diagnosis covers dependency, build, test, YAML/configuration, permission, and
+authentication failures. Suggested fixes use the log evidence and include file/line
+references when GitHub provides them. Automatic edits remain limited to proven cases
+such as a missing trusted Python package, a Node.js major version requirement, or an
+`npm ci` command without a lockfile. Authentication failures, missing secrets, leaked
+credentials, and other unsupported failures require manual repair and are never
+retried automatically. A retry or edit requires explicit confirmation, and recovery
+is checked through the resulting workflow run.
 
 Safety checks include:
 
